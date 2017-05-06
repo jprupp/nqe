@@ -1,4 +1,5 @@
 import Control.Monad
+import Control.Monad.Reader
 import Data.Typeable
 import Test.Hspec
 import Control.Concurrent.NQE
@@ -6,33 +7,27 @@ import Control.Concurrent.NQE
 data Ping = Ping deriving (Eq, Show, Typeable)
 data Pong = Pong deriving (Eq, Show, Typeable)
 
-ping :: Process -> Process -> IO ()
-ping proc my = replicateM_ 4 $ do
-    send proc (my, Ping)
+ping :: Process -> ProcessM ()
+ping proc = replicateM_ 4 $ do
+    my <- ask
+    send proc (Ping, my)
     Pong <- receive
     return ()
 
-pong :: Process -> IO ()
-pong _ = forever $ do
-    (proc, Ping) <- receive
+pong :: ProcessM ()
+pong = forever $ do
+    (Ping, proc) <- receive
     send proc Pong
-
-usingWithProcess :: IO ()
-usingWithProcess =
-    withProcess "pong" pong $ \ po ->
-    withProcess "ping" (ping po) $ \ pi ->
-    waitFor pi
-
-usingStartProcess :: IO ()
-usingStartProcess = do
-    po <- startProcess "pong" pong
-    pi <- startProcess "ping" (ping po)
-    waitFor pi
 
 main :: IO ()
 main = hspec $ do
     describe "two processses exchange ping/pong messages" $ do
-        it "launched via startProcess" $
-            usingStartProcess
+        it "launched via startProcess" $ do
+            o <- startProcess pong
+            i <- startProcess (ping o)
+            waitFor i
+            stop o
         it "launched via withProcess" $
-            usingWithProcess
+            withProcess pong $ \o ->
+            withProcess (ping o) $ \i ->
+            waitFor i

@@ -1,311 +1,221 @@
-module Control.Concurrent.NQE.Process
-    ( Process
-    , procThreadId
-    , procName
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 
-    , Link(..)
-    , ProcessException(..)
-
-    , getProcess
-    , getMyProcess
-
-    , startProcess
-    , withProcess
-
-    , isRunning
-
-    , link
-    , unLink
-    
-    , monitor
-    , deMonitor
-
-    , send
-    , receive
-    , receiveAny
-    , receiveMonitor
-    , receiveMatch
-    , receiveMonitorMatch
-
-    , waitFor
-    , stop
-    , kill
-    ) where
+module Control.Concurrent.NQE.Process where
 
 --
 -- Non-blocking asynchronous processes with mailboxes
 --
 
-import Control.Applicative
 import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Exception
 import Control.Monad
 import Control.Monad.IO.Class
+import Control.Monad.Reader
 import Data.Dynamic
-import Data.Maybe
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
-import Data.Set (Set)
-import qualified Data.Set as Set
-import Data.Typeable
-import GHC.Conc
-import System.IO.Unsafe
 
---
--- External data types
---
+type Mailbox = TQueue Dynamic
+type ProcessT = ReaderT Process
+type ProcessM = ProcessT IO
+type MonadProcess = MonadReader Process
 
--- Do not expose constructor or extractors for Process
+data Handle m   
+    = forall a. Typeable a => Case
+        { unHandle :: a -> m () }
+    | forall a. Typeable a => Filter
+        { unFilter :: a -> Bool
+        , unHandle :: a -> m ()
+        }
+    | Default
+        { handleDef :: m () }
 
 data Process = Process
-    { procThreadId :: ThreadId
-    , procName     :: String
-    , procMailbox  :: TQueue Dynamic
-    , procLinks    :: TVar (Set ThreadId)
-    , procMonitors :: TVar (Set ThreadId)
-    , procRunning  :: TVar (Bool, Maybe SomeException)
-    } deriving (Typeable)
+    { thread   :: ThreadId
+    , mailbox  :: Mailbox
+    , links    :: TVar [Process]
+    , monitors :: TVar [Process]
+    , running  :: TVar (Bool, Maybe SomeException)
+    } deriving Typeable
 
-data ProcSig
-    = SigStop
-    | SigLink { sigLink  :: Link }
-    | SigKill { sigError :: SomeException }
+data Signal
+    = Stop
+    | Linked { linked :: Remote }
+    | Kill { killReason :: SomeException }
     deriving (Show, Typeable)
 
-data Link
-    = LinkFinished
-        { linkThreadId   :: ThreadId
-        , linkProcName   :: String
-        }
-    | LinkDied
-        { linkThreadId   :: ThreadId
-        , linkProcName   :: String
-        , linkError      :: SomeException
+data Remote
+    = Finished
+        { remoteThread :: ThreadId }
+    | Died
+        { remoteThread :: ThreadId
+        , remoteError  :: SomeException
         }
     deriving (Show, Typeable)
-instance Exception Link
+instance Exception Remote
 
-data ProcessException
-    = NoProcessFor { errThreadId  :: ThreadId }
-    | Stopped
+data ProcessException = Stopped
     deriving (Show, Typeable)
 instance Exception ProcessException
 
---
--- Internal data types
---
-
-type ProcessTable = Map ThreadId Process
-
---
--- Internal functions
---
-
-processTable :: TVar ProcessTable
-processTable = unsafePerformIO $ newTVarIO Map.empty
-
-getProcessSTM :: ThreadId -> STM (Maybe Process)
-getProcessSTM tid = Map.lookup tid <$> readTVar processTable
-
-receiveAnySTM :: Process -> STM Dynamic
-receiveAnySTM my = do
-    msg <- readTQueue (procMailbox my)
+receiveDynSTM :: ProcessT STM Dynamic
+receiveDynSTM = ask >>= \my -> lift $ do
+    msg <- readTQueue $ mailbox my
     case fromDynamic msg of
-        Just SigStop     -> throw Stopped
-        Just (SigLink l) -> throw l
-        Just (SigKill s) -> throw s
-        Nothing          -> return msg
+        Just Stop       -> throwSTM Stopped
+        Just (Linked l) -> throwSTM l
+        Just (Kill s)   -> throwSTM s
+        Nothing         -> return msg
 
---
--- External functions
---
-
-getProcess :: ThreadId -> IO (Maybe Process)
-getProcess = atomically . getProcessSTM
-
-getMyProcess :: IO Process
-getMyProcess = myThreadId >>= fmap fromJust . getProcess
-
-startProcess
-    :: String
-    -> (Process -> IO ())
-    -> IO Process
-startProcess name action = do
+startProcess :: ProcessM () -> IO Process
+startProcess action = do
     pv <- atomically $ newEmptyTMVar
     tid <- forkFinally (go pv) (cleanup pv)
     atomically $ do
-        proc <- new tid
-        putTMVar pv proc
-        return proc
+        p <- new tid
+        putTMVar pv p
+        return p
   where
     new tid = do
-        pt <- readTVar processTable
         mbox <- newTQueue
-        running <- newTVar (True, Nothing)
-        ls <- newTVar $ Set.empty
-        ms <- newTVar $ Set.empty
-        let proc = Process tid name mbox ls ms running
-        modifyTVar processTable $ Map.insert tid proc
-        return proc
+        r <- newTVar (True, Nothing)
+        ls <- newTVar []
+        ms <- newTVar []
+        return Process
+            { thread   = tid
+            , mailbox  = mbox
+            , links    = ls
+            , monitors = ms
+            , running  = r
+            }
     go pv = do
-        proc <- atomically $ readTMVar pv
-        action proc
+        p <- atomically $ readTMVar pv
+        runReaderT action p
+        return ()
     cleanup pv es = atomically $ do
-        proc <- readTMVar pv
-        ls <- readTVar $ procLinks proc
-        ms <- readTVar $ procMonitors proc
-        lns <- fmap catMaybes $ mapM getProcessSTM $ Set.elems ls
-        mns <- fmap catMaybes $ mapM getProcessSTM $ Set.elems ms 
-        let em = either Just (const Nothing) es
-        forM_ lns $ flip sendSTM $ case em of
-            Nothing -> SigLink LinkFinished
-                { linkThreadId = procThreadId proc
-                , linkProcName = procName proc
-                }
-            Just e -> SigLink LinkDied
-                { linkThreadId = procThreadId proc
-                , linkProcName = procName proc
-                , linkError    = e
-                }
-        forM_ mns $ flip sendSTM $ case em of
-            Nothing -> LinkFinished
-                { linkThreadId = procThreadId proc
-                , linkProcName = procName proc
-                }
-            Just e -> LinkDied
-                { linkThreadId = procThreadId proc
-                , linkProcName = procName proc
-                , linkError    = e
-                }
-        writeTVar (procRunning proc) (False, em)
-        modifyTVar processTable $ Map.delete $ procThreadId proc
+        p <- readTMVar pv
+        ls <- readTVar $ links    p
+        ms <- readTVar $ monitors p
+        let me = case es of
+                Right () -> Nothing
+                Left  e  -> Just e
+            rm = case me of
+                Nothing -> Finished (thread p)
+                Just e  -> Died     (thread p) e
+        forM_ ls $ flip sendSTM $ Linked rm
+        forM_ ms $ flip sendSTM rm
+        writeTVar (running p) (False, me)
 
-withProcess :: String -> (Process -> IO ()) -> (Process -> IO ()) -> IO ()
-withProcess name action = bracket (startProcess name action) stop
+withProcess :: ProcessM () -> (Process -> IO ()) -> IO ()
+withProcess action = bracket (startProcess action) stop
 
 isRunningSTM :: Process -> STM Bool
-isRunningSTM = fmap fst . readTVar . procRunning
+isRunningSTM = fmap fst . readTVar . running
 
-isRunning :: Process -> IO Bool
-isRunning = atomically . isRunningSTM
+isRunning :: MonadIO m => Process -> m Bool
+isRunning = liftIO . atomically . isRunningSTM
 
-link :: Process -> IO ()
-link proc = do
-    tid <- myThreadId
-    atomically $ do
-        my <- fromJust <$> getProcessSTM tid
-        running <- isRunningSTM proc
-        if running then add tid else dead my
+link :: (MonadIO m, MonadProcess m) => Process -> m ()
+link proc = ask >>= \my -> liftIO . atomically $ do
+    r <- isRunningSTM proc
+    if r then add my else dead my
   where
-    add tid = modifyTVar (procLinks proc) $ Set.insert tid
+    add my = modifyTVar (links proc) $
+        (my:) . filter ((/= thread my) . thread)
     dead my = do
-        em <- fmap snd $ readTVar $ procRunning proc
+        em <- snd <$> readTVar (running proc)
         sendSTM my $ case em of
-            Nothing -> SigLink LinkFinished
-                { linkThreadId = procThreadId proc
-                , linkProcName = procName proc
-                }
-            Just e -> SigLink LinkDied
-                { linkThreadId = procThreadId proc
-                , linkProcName = procName proc
-                , linkError    = e
+            Nothing -> Linked Finished
+                { remoteThread = thread proc }
+            Just e -> Linked Died
+                { remoteThread = thread proc
+                , remoteError  = e
                 }
 
-unLink :: Process -> IO ()
-unLink proc = do
-    my <- myThreadId
-    atomically $ modifyTVar (procLinks proc) $ Set.delete my
+unLink :: (MonadIO m, MonadProcess m) => Process -> m ()
+unLink proc = ask >>= \my -> liftIO . atomically $
+    modifyTVar (links proc) $ filter ((/= thread my) . thread)
 
-monitor :: Process -> IO ()
-monitor proc = do
-    tid <- myThreadId
-    atomically $ do
-        my <- fromJust <$> getProcessSTM tid
-        running <- isRunningSTM proc
-        if running then add tid else dead my
+monitor :: (MonadIO m, MonadProcess m) => Process -> m ()
+monitor proc = ask >>= \my -> liftIO . atomically $ do
+    r <- isRunningSTM proc
+    if r then add my else dead my
   where
-    add tid = modifyTVar (procMonitors proc) $ Set.insert tid
+    add my = modifyTVar (monitors proc) $
+        (my:) . filter ((/= thread my) . thread)
     dead my = do
-        em <- fmap snd $ readTVar $ procRunning proc
+        em <- snd <$> readTVar (running proc)
         sendSTM my $ case em of
-            Nothing -> LinkFinished
-                { linkThreadId = procThreadId proc
-                , linkProcName = procName proc
-                }
-            Just e -> LinkDied
-                { linkThreadId = procThreadId proc
-                , linkProcName = procName proc
-                , linkError    = e
+            Nothing -> Finished
+                { remoteThread = thread proc }
+            Just e -> Died
+                { remoteThread = thread proc
+                , remoteError  = e
                 }
 
-deMonitor :: Process -> IO ()
-deMonitor proc = do
-    my <- myThreadId
-    atomically $ modifyTVar (procMonitors proc) $ Set.delete my
+deMonitor :: (MonadIO m, MonadProcess m) => Process -> m ()
+deMonitor proc = ask >>= \my -> liftIO . atomically $
+    modifyTVar (monitors proc) $ filter ((/= thread my) . thread)
 
-send :: Typeable a => Process -> a -> IO ()
-send proc = atomically . sendSTM proc
+send :: (MonadIO m, Typeable a) => Process -> a -> m ()
+send proc = liftIO . atomically . sendSTM proc
 
 sendSTM :: Typeable a => Process -> a -> STM ()
-sendSTM proc = writeTQueue (procMailbox proc) . toDyn
+sendSTM proc = writeTQueue (mailbox proc) . toDyn
 
-waitFor :: Process -> IO ()
-waitFor proc = atomically $ do
-    (running, em) <- readTVar $ procRunning proc
-    check $ not running
+waitForSTM :: Process -> STM ()
+waitForSTM proc = do
+    (r, em) <- readTVar $ running proc
+    check $ not r
     case em of
         Nothing -> return ()
-        Just  e -> throw e
+        Just e  -> throw  e
 
-receiveAny :: IO Dynamic
-receiveAny = do
-    tid <- myThreadId
-    atomically $ getProcessSTM tid >>= receiveAnySTM . fromJust
+waitFor :: MonadIO m => Process -> m ()
+waitFor = liftIO . atomically . waitForSTM
 
-receiveMatchDyn :: Typeable a => (Dynamic -> Maybe a) -> IO a
-receiveMatchDyn f = do
-    tid <- myThreadId
-    atomically $ getProcessSTM tid >>= g [] . fromJust
+receiveDyn :: (MonadIO m, MonadProcess m) => m Dynamic
+receiveDyn = ask >>= liftIO . atomically . runReaderT receiveDynSTM
+
+receiveAny :: (MonadProcess m, MonadIO m) => [Handle m] -> m ()
+receiveAny hs = ask >>= liftIO . atomically . go [] >>= id
   where
-    g acc my = do
-        d <- receiveAnySTM my
-        case f d of
-            Nothing -> g (d : acc) my
-            Just  x -> requeue acc my >> return x
-    requeue acc my = forM_ acc $ unGetTQueue $ procMailbox my
+    go xs my = do
+        x <- runReaderT receiveDynSTM my
+        hndlr <- hnd hs x
+        case hndlr of
+            Just h  -> requeue xs my >> return h
+            Nothing -> go (x:xs) my
+    hnd [] _ = return Nothing
+    hnd (Case h : ys) x =
+        case fromDynamic x of
+            Nothing -> hnd ys x
+            Just m  -> return $ Just (h m)
+    hnd (Filter f h : ys) x =
+        case fromDynamic x of
+            Nothing -> hnd ys x
+            Just m  -> if f m then return $ Just (h m) else hnd hs x
+    hnd (Default m : _) _ = return $ Just m
+        
 
-receiveMonitorMatch :: Typeable a => (a -> Bool) -> IO (Either Link a)
-receiveMonitorMatch f =
-    receiveMatchDyn g
+requeue :: [Dynamic] -> Process -> STM ()
+requeue xs my = forM_ xs $ unGetTQueue $ mailbox my
+
+receiveMatch :: (MonadIO m, MonadProcess m, Typeable a) => (a -> Bool) -> m a
+receiveMatch f = ask >>= liftIO . atomically . go []
   where
-    g d = mon d <|> dyn d
-    mon = maybe Nothing (Just . Left) . fromDynamic
-    dyn d = case fromDynamic d of
-        Nothing -> Nothing
-        Just  x -> if f x then Just $ Right x else Nothing
+    go xs my = do
+        x <- runReaderT receiveDynSTM my
+        case fromDynamic x of
+            Nothing -> go (x:xs) my
+            Just m  -> if f m then requeue xs my >> return m else go (x:xs) my
 
-receiveMonitor :: Typeable a => IO (Either Link a)
-receiveMonitor =
-    receiveMatchDyn f
-  where
-    f d = mon d <|> dyn d
-    mon = maybe Nothing (Just . Left)  . fromDynamic
-    dyn = maybe Nothing (Just . Right) . fromDynamic
+receive :: (MonadIO m, MonadProcess m, Typeable a) => m a
+receive = receiveMatch (const True)
 
-receiveMatch :: Typeable a => (a -> Bool) -> IO a
-receiveMatch f =
-    receiveMatchDyn g
-  where
-    g d = case fromDynamic d of
-        Nothing -> Nothing
-        Just  x -> if f x then Just x else Nothing
+stop :: MonadIO m => Process -> m ()
+stop proc = send proc Stop
 
-receive :: Typeable a => IO a
-receive = receiveMatchDyn fromDynamic
-
-stop :: Process -> IO ()
-stop proc = send proc SigStop
-
-kill :: Process -> SomeException -> IO ()
-kill proc ex = send proc $ SigKill ex
+kill :: MonadIO m => Process -> SomeException -> m ()
+kill proc ex = send proc $ Kill ex
