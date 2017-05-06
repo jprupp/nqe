@@ -23,13 +23,13 @@ pong = forever $ do
 main :: IO ()
 main = hspec $ do
     describe "two basic processes" $ do
-        it "exchange four ping/pong messages" $ do
+        it "exchange four ping/pong messages (startProcess)" $ do
             o <- startProcess pong
             i <- startProcess (ping o)
             Right cnt <- waitFor i
             _ <- stop o
             fromDynamic cnt `shouldBe` Just (4 :: Int)
-        it "exchange four ping/pong messages differently" $
+        it "exchange four ping/pong messages (withProcess)" $
             withProcess pong $ \o ->
             withProcess (ping o) $ \i -> do
             Right cnt <- waitFor i
