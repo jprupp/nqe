@@ -1,5 +1,4 @@
 import Control.Monad
-import Control.Monad.Reader
 import Control.Monad.State
 import Data.Dynamic
 import Test.Hspec
@@ -8,12 +7,14 @@ import Control.Concurrent.NQE
 data Ping = Ping deriving (Eq, Show, Typeable)
 data Pong = Pong deriving (Eq, Show, Typeable)
 
-ping :: Process -> ProcessM Int
-ping proc = flip execStateT 0 $ replicateM_ 4 $ do
-    my <- lift ask
-    send proc (Ping, my)
-    Pong <- receive
-    modify (+1)
+ping :: ProcessM Int
+ping = flip execStateT 0 $ do
+    proc <- getProcess "pong"
+    replicateM_ 4 $ do
+        my <- myProcess
+        send proc (Ping, my)
+        Pong <- receive
+        modify (+1)
 
 pong :: ProcessM ()
 pong = forever $ do
@@ -24,13 +25,13 @@ main :: IO ()
 main = hspec $ do
     describe "two basic processes" $ do
         it "exchange four ping/pong messages (startProcess)" $ do
-            o <- startProcess pong
-            i <- startProcess (ping o)
+            o <- startProcess (Just "pong") pong
+            i <- startProcess Nothing ping
             Right cnt <- waitFor i
             _ <- stop o
             fromDynamic cnt `shouldBe` Just (4 :: Int)
         it "exchange four ping/pong messages (withProcess)" $
-            withProcess pong $ \o ->
-            withProcess (ping o) $ \i -> do
-            Right cnt <- waitFor i
-            fromDynamic cnt `shouldBe` Just (4 :: Int)
+            withProcess (Just "pong") pong $ \_ -> do
+                withProcess Nothing ping $ \i -> do
+                    Right cnt <- waitFor i
+                    fromDynamic cnt `shouldBe` Just (4 :: Int)
