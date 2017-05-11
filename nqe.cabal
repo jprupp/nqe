@@ -18,7 +18,6 @@ library
   exposed-modules:     Control.Concurrent.NQE
   other-modules:       Control.Concurrent.NQE.Process
   build-depends:       base >= 4.7 && < 5
-                     , containers >= 0.5 && < 0.6
                      , mtl >= 2.2 && < 2.3
                      , stm >= 2.4 && < 3
   default-language:    Haskell2010
@@ -30,7 +29,6 @@ test-suite nqe-test
   build-depends:       base
                      , nqe
                      , hspec >= 2.4 && < 3
-                     , mtl >= 2.2 && < 2.3
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   default-language:    Haskell2010
 

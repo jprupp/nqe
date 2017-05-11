@@ -15,35 +15,37 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Reader
 import Data.Dynamic
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
-import System.IO.Unsafe
+import Data.List
 
 type Mailbox = TQueue Dynamic
 type ProcessT = ReaderT Process
 type ProcessM = ProcessT IO
 type MonadProcess = MonadReader Process
-type ProcessRegistry = Map String Process
-type ReverseRegistry = Map ThreadId String
 
 data Handle m   
     = forall a. Typeable a =>
-        Case { unHandle :: a -> m () }
+      Case { unHandle :: a -> m () }
     | forall a. Typeable a =>
-        Filter { unFilter :: a -> Bool
-               , unHandle :: a -> m ()
-               }
-    |   Default { handleDef :: m () }
+      Filter { unFilter :: a -> Bool
+             , unHandle :: a -> m ()
+             }
+    | Default { handleDef :: m () }
 
-data Process
-    = Process
-        { thread   :: ThreadId
-        , mailbox  :: Mailbox
-        , links    :: TVar [Process]
-        , monitors :: TVar [Process]
-        , result   :: TMVar (Either SomeException Dynamic)
-        }
-    deriving Typeable
+data ProcessSpec = ProcessSpec
+    { provides :: Maybe String
+    , depends  :: [String]
+    , action   :: ProcessM ()
+    } deriving (Typeable)
+
+data Process = Process
+    { name     :: Maybe String
+    , thread   :: ThreadId
+    , mailbox  :: Mailbox
+    , procs    :: TVar [Process]
+    , links    :: TVar [Process]
+    , monitors :: TVar [Process]
+    , running  :: TVar (Bool, Maybe SomeException)
+    } deriving Typeable
 
 data Signal
     = Stop
@@ -63,16 +65,10 @@ instance Exception Remote
 
 data ProcessException
     = Stopped
-    | ProcessAlreadyRegisteredAs String
-    | NameAlreadyRegistered String
+    | DependencyNotFound String
+    | DependencyNotRunning String
     deriving (Show, Typeable)
 instance Exception ProcessException
-
-processRegistry :: TVar ProcessRegistry
-processRegistry = unsafePerformIO $ newTVarIO Map.empty
-
-reverseRegistry :: TVar ReverseRegistry
-reverseRegistry = unsafePerformIO $ newTVarIO Map.empty
 
 receiveDynSTM :: ProcessT STM Dynamic
 receiveDynSTM = ask >>= \my -> lift $ do
@@ -83,82 +79,118 @@ receiveDynSTM = ask >>= \my -> lift $ do
         Just (Kill s)   -> throwSTM s
         Nothing         -> return msg
 
-startProcess :: Typeable a => Maybe String -> ProcessM a -> IO Process
-startProcess mname action = do
-    pbox <- atomically $ newEmptyTMVar
-    tid <- forkFinally (go pbox) (cleanup pbox)
-    atomically $ do
-        p <- new tid
-        putTMVar pbox p
-        return p
+startProcess :: ProcessSpec -> ProcessM Process
+startProcess s = do
+    parent <- myProcess
+    liftIO $ do
+        (pbox, tbox) <- atomically $ (,) <$> newEmptyTMVar <*> newEmptyTMVar
+        tid <- forkFinally (go pbox tbox parent) (cleanup pbox parent)
+        atomically $ putTMVar tbox tid
+        atomically $ readTMVar pbox
   where
-    new tid = do
+    new tid parent = do
         mbox <- newTQueue
-        r <- newEmptyTMVar
-        ls <- newTVar []
-        ms <- newTVar []
-        let p = Process { thread   = tid
-                        , mailbox  = mbox
-                        , links    = ls
-                        , monitors = ms
-                        , result   = r
-                        }
-        case mname of
-            Just name -> registerSTM name p
+        run  <- newTVar (True, Nothing)
+        mons <- newTVar []
+        lns  <- newTVar []
+        deps <- forM (nub $ depends s) $ \dep -> do
+            mp <- getProcessSTM dep parent
+            case mp of
+                Nothing  -> throwSTM $ DependencyNotFound dep
+                Just p -> isRunningSTM p >>= \alive ->
+                    if alive
+                    then return p
+                    else throwSTM $ DependencyNotRunning dep
+        pcs  <- newTVar deps
+        let proc = Process { name     = provides s
+                           , thread   = tid
+                           , mailbox  = mbox
+                           , procs    = pcs
+                           , links    = lns
+                           , monitors = mons
+                           , running  = run
+                           }
+        forM_ deps $ linkSTM proc
+        case provides s of
             Nothing -> return ()
-        return p
-    go pbox = do
-        p <- atomically $ do
-            readTMVar pbox
-        runReaderT action p
-    cleanup pbox es = atomically $ do
-        p@Process
-            { links = lbox
+            Just  _ -> do
+                linkSTM parent proc
+                modifyTVar (procs parent) $ (proc :)
+        return proc
+    go pbox tbox parent = do
+        proc <- atomically $ do
+            tid  <- readTMVar tbox
+            proc <- new tid parent
+            putTMVar pbox proc
+            return proc
+        runReaderT (action s) proc
+    cleanup pbox parent es = atomically $ do
+        proc@Process
+            { thread   = tid
+            , links    = lbox
             , monitors = mbox
-            , result = rbox
+            , running  = rbox
             } <- readTMVar pbox
         ls <- readTVar lbox
         ms <- readTVar mbox
-        let rm = case es of
-                Right _ -> Finished (thread p)
-                Left  e -> Died (thread p) e
+        let rm = case es of Right _ -> Finished (thread proc)
+                            Left  e -> Died (thread proc) e
         forM_ ls $ flip sendSTM $ Linked rm
         forM_ ms $ flip sendSTM rm
-        deregisterSTM p
-        putTMVar rbox $ toDyn <$> es
+        modifyTVar (procs parent) $ filter ((/= tid) . thread)
+        writeTVar rbox (False, either Just (const Nothing) es)
 
-withProcess :: Typeable a
-            => Maybe String
+withProcess :: ProcessSpec
+            -> (Process -> ProcessM a)
             -> ProcessM a
-            -> (Process -> IO b)
-            -> IO b
-withProcess mname action = bracket (startProcess mname action) stop
+withProcess spec act = do
+    my <- myProcess
+    liftIO $ bracket (runReaderT (startProcess spec) my) stop (go my)
+  where
+    go my p = runReaderT (act p) my
+
+asProcess :: MonadIO m => Maybe String -> [Process] -> ProcessT m a -> m a
+asProcess mname deps act = do
+    tid <- liftIO myThreadId
+    proc <- liftIO $ atomically $ do
+        mbox <- newTQueue
+        run  <- newTVar (True, Nothing)
+        mons <- newTVar []
+        lns  <- newTVar []
+        prcs <- newTVar deps
+        return $ Process { name     = mname
+                         , thread   = tid
+                         , mailbox  = mbox
+                         , procs    = prcs
+                         , links    = lns
+                         , monitors = mons
+                         , running  = run
+                         }
+    runReaderT act proc
 
 isRunningSTM :: Process -> STM Bool
-isRunningSTM Process{ result = rbox }= isEmptyTMVar rbox
+isRunningSTM Process{ running = rbox } = fst <$> readTVar rbox
 
 isRunning :: MonadIO m => Process -> m Bool
 isRunning = liftIO . atomically . isRunningSTM
 
-link :: (MonadIO m, MonadProcess m) => Process -> m ()
-link proc = do
-    my <- ask
-    liftIO . atomically $ do
-        r <- isRunningSTM proc
-        if r then add my else dead my
+linkSTM :: Process -> Process -> STM ()
+linkSTM my proc = do
+    r <- isRunningSTM proc
+    if r then add else dead
   where
-    add my = modifyTVar (links proc) $
-        (my:) . filter (remove my)
-    remove my p = thread my /= thread p
-    dead my = do
-        se <- readTMVar (result proc)
-        sendSTM my $ case se of
-            Right _ -> Linked Finished
-                { remoteThread = thread proc }
-            Left  e -> Linked Died
-                { remoteThread = thread proc
-                , remoteError  = e
-                }
+    add = modifyTVar (links proc) $ (my :) . filter remove
+    remove p = thread my /= thread p
+    dead = do
+        me <- snd <$> readTVar (running proc)
+        sendSTM my $ case me of
+            Nothing -> Linked Finished { remoteThread = thread proc }
+            Just  e -> Linked Died { remoteThread = thread proc
+                                   , remoteError  = e
+                                   }
+
+link :: (MonadIO m, MonadProcess m) => Process -> m ()
+link proc = ask >>= \my -> liftIO . atomically $ linkSTM my proc
 
 unLink :: (MonadIO m, MonadProcess m) => Process -> m ()
 unLink proc = do
@@ -179,14 +211,12 @@ monitor proc = do
         (my:) . filter (remove my)
     remove my p = thread my /= thread p
     dead my = do
-        es <- readTMVar (result proc)
-        sendSTM my $ case es of
-            Right _ -> Finished
-                { remoteThread = thread proc }
-            Left  e -> Died
-                { remoteThread = thread proc
-                , remoteError  = e
-                }
+        me <- snd <$> readTVar (running proc)
+        sendSTM my $ case me of
+            Nothing -> Finished { remoteThread = thread proc }
+            Just  e -> Died { remoteThread = thread proc
+                            , remoteError  = e
+                            }
 
 deMonitor :: (MonadIO m, MonadProcess m) => Process -> m ()
 deMonitor proc = do
@@ -202,10 +232,10 @@ send proc = liftIO . atomically . sendSTM proc
 sendSTM :: Typeable msg => Process -> msg -> STM ()
 sendSTM proc = writeTQueue (mailbox proc) . toDyn
 
-waitForSTM :: Process -> STM (Either SomeException Dynamic)
-waitForSTM = readTMVar . result
+waitForSTM :: Process -> STM ()
+waitForSTM p = readTVar (running p) >>= check . fst
 
-waitFor :: MonadIO m => Process -> m (Either SomeException Dynamic)
+waitFor :: MonadIO m => Process -> m ()
 waitFor = liftIO . atomically . waitForSTM
 
 receiveDyn :: (MonadIO m, MonadProcess m) => m Dynamic
@@ -228,7 +258,7 @@ receiveAny hs = ask >>= liftIO . atomically . go [] >>= id
     hnd (Filter f h : ys) x =
         case fromDynamic x of
             Nothing -> hnd ys x
-            Just m  -> if f m then return $ Just (h m) else hnd hs x
+            Just  m -> if f m then return $ Just (h m) else hnd hs x
     hnd (Default m : _) _ = return $ Just m
         
 
@@ -249,61 +279,19 @@ receiveMatch f = ask >>= liftIO . atomically . go []
 receive :: (MonadIO m, MonadProcess m, Typeable msg) => m msg
 receive = receiveMatch (const True)
 
-stop :: MonadIO m => Process -> m (Either SomeException Dynamic)
+stop :: MonadIO m => Process -> m ()
 stop proc = send proc Stop >> waitFor proc
 
 kill :: MonadIO m
      => Process
      -> SomeException
-     -> m (Either SomeException Dynamic)
+     -> m ()
 kill proc ex = send proc (Kill ex) >> waitFor proc
 
-registeredSTM :: ThreadId -> STM (Maybe String)
-registeredSTM tid = Map.lookup tid <$> readTVar reverseRegistry
-
-registered :: MonadIO m => Process -> m (Maybe String)
-registered Process{ thread = tid } = liftIO . atomically $ registeredSTM tid
-
-registerSTM :: String -> Process -> STM ()
-registerSTM name proc@Process{ thread = tid } = do
-    mn <- Map.lookup tid <$> readTVar reverseRegistry
-    case mn of
-        Just  n -> throwSTM $ ProcessAlreadyRegisteredAs n
-        Nothing -> return ()
-    mp <- Map.lookup name <$> readTVar processRegistry
-    case mp of
-        Just  _ -> throwSTM $ NameAlreadyRegistered name
-        Nothing -> return ()
-    modifyTVar processRegistry $ Map.insert name proc
-    modifyTVar reverseRegistry $ Map.insert tid name
-
-register :: MonadIO m => String -> Process -> m ()
-register name proc = liftIO . atomically $ registerSTM name proc
-
-deregisterSTM :: Process -> STM ()
-deregisterSTM Process{ thread = tid } = do
-    mn <- Map.lookup tid <$> readTVar reverseRegistry
-    case mn of
-        Just n -> do
-            modifyTVar processRegistry $ Map.delete n
-            modifyTVar reverseRegistry $ Map.delete tid
-        Nothing -> return ()
-
-deregister :: MonadIO m => Process -> m ()
-deregister = liftIO . atomically . deregisterSTM
-
-getRegisteredSTM :: String -> STM (Maybe Process)
-getRegisteredSTM name = Map.lookup name <$> readTVar processRegistry
-
-getRegistered :: MonadIO m => String -> m (Maybe Process)
-getRegistered = liftIO . atomically . getRegisteredSTM
-
-getProcess :: MonadIO m => String -> m Process
-getProcess name = liftIO . atomically $ do
-    mp <- getRegisteredSTM name
-    case mp of
-        Nothing -> retry
-        Just  p -> return p
+getProcessSTM :: String -> Process -> STM (Maybe Process)
+getProcessSTM n p = do
+    ps <- (p :) <$> readTVar (procs p)
+    return $ find ((== Just n) . name) ps
 
 myProcess :: MonadProcess m => m Process
 myProcess = ask
