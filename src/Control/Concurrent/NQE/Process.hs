@@ -71,8 +71,8 @@ data ProcessException
 instance Exception ProcessException
 
 receiveDynSTM :: ProcessT STM Dynamic
-receiveDynSTM = ask >>= \my -> lift $ do
-    msg <- readTQueue $ mailbox my
+receiveDynSTM = myProcess >>= \me -> lift $ do
+    msg <- readTQueue $ mailbox me
     case fromDynamic msg of
         Just Stop       -> throwSTM Stopped
         Just (Linked l) -> throwSTM l
@@ -149,14 +149,14 @@ withProcess
     -> (Process -> ProcessM a)
     -> ProcessM a
 withProcess spec act = do
-    my <- myProcess
+    me <- myProcess
     liftIO $
         bracket
-        (runReaderT (startProcess spec) my)
+        (runReaderT (startProcess spec) me)
         stop
-        (go my)
+        (go me)
   where
-    go my p = runReaderT (act p) my
+    go me p = runReaderT (act p) me
 
 asProcess
     :: MonadIO m
@@ -190,46 +190,48 @@ isRunning :: MonadIO m => Process -> m Bool
 isRunning = liftIO . atomically . isRunningSTM
 
 linkSTM :: Process -> Process -> STM ()
-linkSTM my proc = do
+linkSTM me proc = do
     r <- isRunningSTM proc
     if r then add else dead
   where
-    add = modifyTVar (links proc) $ (my :) . filter remove
-    remove p = thread my /= thread p
+    add = modifyTVar (links proc) $ (me :) . filter remove
+    remove p = thread me /= thread p
     dead = do
-        me <- snd <$> readTVar (running proc)
-        sendSTM my $ case me of
-            Nothing -> Linked Finished { remoteThread = thread proc }
+        merr <- snd <$> readTVar (running proc)
+        sendSTM me $ case merr of
+            Nothing -> Linked Finished
+                { remoteThread = thread proc }
             Just  e -> Linked Died
                 { remoteThread = thread proc
                 , remoteError  = e
                 }
 
 link :: (MonadIO m, MonadProcess m) => Process -> m ()
-link proc = ask >>= \my -> liftIO . atomically $ linkSTM my proc
+link proc = myProcess >>= \me -> liftIO . atomically $ linkSTM me proc
 
 unLink :: (MonadIO m, MonadProcess m) => Process -> m ()
 unLink proc = do
-    my <- ask
+    me <- myProcess
     liftIO . atomically $
-        modifyTVar (links proc) $ filter (remove my)
+        modifyTVar (links proc) $ filter (remove me)
   where
-    remove my p = thread my /= thread p
+    remove me p = thread me /= thread p
 
 monitor :: (MonadIO m, MonadProcess m) => Process -> m ()
 monitor proc = do
-    my <- ask
+    me <- myProcess
     liftIO . atomically $ do
         r <- isRunningSTM proc
-        if r then add my else dead my
+        if r then add me else dead me
   where
-    add my = modifyTVar (monitors proc) $
-        (my:) . filter (remove my)
-    remove my p = thread my /= thread p
-    dead my = do
-        me <- snd <$> readTVar (running proc)
-        sendSTM my $ case me of
-            Nothing -> Finished { remoteThread = thread proc }
+    add me = modifyTVar (monitors proc) $
+        (me :) . filter (remove me)
+    remove me p = thread me /= thread p
+    dead me = do
+        merr <- snd <$> readTVar (running proc)
+        sendSTM me $ case merr of
+            Nothing -> Finished
+                { remoteThread = thread proc }
             Just  e -> Died
                 { remoteThread = thread proc
                 , remoteError  = e
@@ -237,11 +239,11 @@ monitor proc = do
 
 deMonitor :: (MonadIO m, MonadProcess m) => Process -> m ()
 deMonitor proc = do
-    my <- ask
+    me <- myProcess
     liftIO . atomically $
-        modifyTVar (monitors proc) $ filter (remove my)
+        modifyTVar (monitors proc) $ filter (remove me)
   where
-    remove my p = thread my /= thread p
+    remove me p = thread me /= thread p
 
 send :: (MonadIO m, Typeable msg) => Process -> msg -> m ()
 send proc = liftIO . atomically . sendSTM proc
@@ -256,17 +258,17 @@ waitFor :: MonadIO m => Process -> m ()
 waitFor = liftIO . atomically . waitForSTM
 
 receiveDyn :: (MonadIO m, MonadProcess m) => m Dynamic
-receiveDyn = ask >>= liftIO . atomically . runReaderT receiveDynSTM
+receiveDyn = myProcess >>= liftIO . atomically . runReaderT receiveDynSTM
 
 receiveAny :: (MonadProcess m, MonadIO m) => [Handle m] -> m ()
-receiveAny hs = ask >>= liftIO . atomically . go [] >>= id
+receiveAny hs = myProcess >>= liftIO . atomically . go [] >>= id
   where
-    go xs my = do
-        x <- runReaderT receiveDynSTM my
+    go xs me = do
+        x <- runReaderT receiveDynSTM me
         hndlr <- hnd hs x
         case hndlr of
-            Just h  -> requeue xs my >> return h
-            Nothing -> go (x:xs) my
+            Just h  -> requeue xs me >> return h
+            Nothing -> go (x : xs) me
     hnd [] _ = return Nothing
     hnd (Case h : ys) x =
         case fromDynamic x of
@@ -283,22 +285,22 @@ receiveAny hs = ask >>= liftIO . atomically . go [] >>= id
         
 
 requeue :: [Dynamic] -> Process -> STM ()
-requeue xs my = forM_ xs $ unGetTQueue $ mailbox my
+requeue xs = forM_ xs . unGetTQueue . mailbox
 
 receiveMatch
     :: (MonadIO m, MonadProcess m, Typeable msg)
     => (msg -> Bool)
     -> m msg
-receiveMatch f = ask >>= liftIO . atomically . go []
+receiveMatch f = myProcess >>= liftIO . atomically . go []
   where
-    go xs my = do
-        x <- runReaderT receiveDynSTM my
+    go xs me = do
+        x <- runReaderT receiveDynSTM me
         case fromDynamic x of
-            Nothing -> go (x:xs) my
+            Nothing -> go (x : xs) me
             Just m  ->
                 if f m
-                then requeue xs my >> return m
-                else go (x:xs) my
+                then requeue xs me >> return m
+                else go (x : xs) me
 
 receive :: (MonadIO m, MonadProcess m, Typeable msg) => m msg
 receive = receiveMatch (const True)
@@ -313,6 +315,14 @@ getProcessSTM :: String -> Process -> STM (Maybe Process)
 getProcessSTM n p = do
     ps <- (p :) <$> readTVar (procs p)
     return $ find ((== Just n) . name) ps
+
+getProcess :: String -> ProcessM Process
+getProcess n = do
+    me <- myProcess
+    mproc <- liftIO . atomically $ getProcessSTM n me
+    case mproc of
+        Nothing -> liftIO . throwIO $ DependencyNotFound n
+        Just proc -> return proc
 
 myProcess :: MonadProcess m => m Process
 myProcess = ask
