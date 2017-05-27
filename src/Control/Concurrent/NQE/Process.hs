@@ -29,7 +29,7 @@ data Handle m
       Filter { unFilter :: a -> Bool
              , unHandle :: a -> m ()
              }
-    | Default { handleDef :: m () }
+    | Default { defHandle :: m () }
 
 data ProcessSpec = ProcessSpec
     { provides :: Maybe String
