@@ -43,13 +43,12 @@ client = runTCPClient cs
 
 pongServer :: AppData -> IO ()
 pongServer ad =
-    withNet src snk go
+    withNet src snk $ \p -> do
+    msg <- receive
+    case msg of
+        ("ping" :: Text) -> send ("pong\n" :: Text) p
+        _                -> return ()
   where
-    go p = do
-        msg <- receive
-        case msg of
-            ("ping" :: Text) -> send ("pong\n" :: Text) p
-            _                -> return ()
     src = appSource ad =$= decoder
     snk = encoder =$= appSink ad
 
