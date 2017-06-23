@@ -1,27 +1,32 @@
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE FlexibleContexts          #-}
+{-# LANGUAGE MultiParamTypeClasses     #-}
 {-# LANGUAGE RecordWildCards           #-}
 {-# OPTIONS_GHC -fno-full-laziness #-}
 module Control.Concurrent.NQE.Process where
 
-import           Control.Concurrent     (ThreadId, forkFinally, myThreadId)
-import           Control.Concurrent.STM (STM, TMVar, TQueue, TVar, atomically,
-                                         check, isEmptyTMVar, modifyTVar,
-                                         newEmptyTMVar, newEmptyTMVarIO,
-                                         newTQueue, newTVar, newTVarIO,
-                                         putTMVar, readTMVar, readTMVar,
-                                         readTQueue, readTVar, readTVarIO,
-                                         throwSTM, unGetTQueue, writeTQueue,
-                                         writeTVar)
-import           Control.Exception      (Exception, SomeException, bracket,
-                                         throwIO)
-import           Control.Monad          (filterM, forM, when, (<=<))
-import           Control.Monad.IO.Class (MonadIO, liftIO)
-import           Data.Dynamic           (Dynamic, Typeable, fromDynamic, toDyn)
-import           Data.List              (nub)
-import           Data.Map.Strict        (Map)
-import qualified Data.Map.Strict        as Map
-import           Data.Maybe             (catMaybes, listToMaybe)
-import           System.IO.Unsafe       (unsafePerformIO)
+import           Control.Concurrent.Lifted   (ThreadId, forkFinally, myThreadId)
+import           Control.Concurrent.STM      (STM, TMVar, TQueue, TVar, check,
+                                              isEmptyTMVar, modifyTVar,
+                                              newEmptyTMVar, newTQueue, newTVar,
+                                              putTMVar, readTMVar, readTMVar,
+                                              readTQueue, readTVar, throwSTM,
+                                              unGetTQueue, writeTQueue,
+                                              writeTVar)
+import qualified Control.Concurrent.STM      as STM
+import           Control.Exception.Lifted    (Exception, SomeException, bracket,
+                                              throwIO)
+import           Control.Monad               (filterM, forM, when, (<=<))
+import           Control.Monad.Base          (MonadBase)
+import           Control.Monad.IO.Class      (MonadIO, liftIO)
+import           Control.Monad.Trans.Control (MonadBaseControl)
+import           Data.Dynamic                (Dynamic, Typeable, fromDynamic,
+                                              toDyn)
+import           Data.List                   (nub)
+import           Data.Map.Strict             (Map)
+import qualified Data.Map.Strict             as Map
+import           Data.Maybe                  (catMaybes, listToMaybe)
+import           System.IO.Unsafe            (unsafePerformIO)
 
 type Mailbox = TQueue (Either Signal Dynamic)
 type ProcessMap = Map ThreadId Process
@@ -64,8 +69,7 @@ data Signal = Stop
 instance Exception Signal
 
 data ProcessException
-    = ProcessNotFound { notFound :: ThreadId }
-    | CouldNotCastDynamic
+    = CouldNotCastDynamic
     deriving (Show, Typeable)
 
 instance Exception ProcessException
@@ -75,19 +79,18 @@ processMap :: TVar ProcessMap
 processMap = unsafePerformIO $ newTVarIO Map.empty
 
 -- | Start a new process running passed action.
-startProcess :: IO ()   -- ^ action
-             -> IO Process
+startProcess :: (MonadBaseControl IO m, MonadIO m)
+             => m ()   -- ^ action
+             -> m Process
 startProcess action = do
     pbox <- newEmptyTMVarIO
-    forkFinally (go pbox) (cleanup pbox)
-    atomically $ readTMVar pbox
+    tid <- forkFinally (go pbox) (cleanup pbox)
+    atomically $ do
+        p <- newProcessSTM tid
+        putTMVar pbox p
+        return p
   where
-    go pbox = do
-        tid <- myThreadId
-        atomically $ do
-            p <- newProcessSTM tid
-            putTMVar pbox p
-        action
+    go pbox = atomically (readTMVar pbox) >> action
     cleanup pbox e = atomically $ do
         p <- readTMVar pbox
         cleanupSTM p e
@@ -110,29 +113,24 @@ cleanupSTM p@Process{..} ret = do
     putTMVar status ret
     modifyTVar processMap $ Map.delete thread
 
-asProcess :: IO a    -- ^ action to run in a process context
-          -> IO a
-asProcess go =
-    bracket acquire release $ const go
-  where
-    acquire = myThreadId >>= atomically . newProcessSTM
-    release me = atomically $ cleanupSTM me $ Right ()
-
 -- | Run another process while performing an action. Stop it when action
 -- completes.
-withProcess :: IO ()              -- ^ action on new process
-            -> (Process -> IO a)  -- ^ action on current process
-            -> IO a
+withProcess :: (MonadBaseControl IO m, MonadIO m)
+            => m ()              -- ^ action on new process
+            -> (Process -> m a)  -- ^ action on current process
+            -> m a
 withProcess f go =
     bracket acquire release go
   where
     acquire = startProcess f
-    release = atomically . sendSTM Stop
+    release p = do
+        atomically $ stopSTM p
+        waitFor p
 
 isRunningSTM :: Process -> STM Bool
 isRunningSTM Process{..} = isEmptyTMVar status
 
-isRunning :: Process -> IO Bool
+isRunning :: MonadIO m => Process -> m Bool
 isRunning = atomically . isRunningSTM
 
 linkSTM :: Process  -- ^ slave (receives signal if master dies)
@@ -146,23 +144,26 @@ linkSTM me remote = do
     dead = sendMsgSTM (Left $ Died $ thread remote) me
 
 -- | Make this process a slave of a remote process.
-link :: Process   -- ^ master (kills this process before dying)
-     -> IO ()
+link :: (MonadBase IO m, MonadIO m)
+     => Process   -- ^ master (kills this process before dying)
+     -> m ()
 link remote = do
     me <- myProcess
     atomically $ linkSTM me remote
 
-unLink :: Process -> IO ()
+unLink :: (MonadBase IO m, MonadIO m)
+       => Process
+       -> m ()
 unLink Process{..} = myProcess >>= \me ->
     atomically $ modifyTVar links $ filter (/= me)
 
-send :: Typeable msg => msg -> Process -> IO ()
+send :: (MonadIO m, Typeable msg) => msg -> Process -> m ()
 send msg = atomically . sendSTM msg
 
 sendSTM :: Typeable msg => msg -> Process -> STM ()
 sendSTM msg = sendMsgSTM (Right $ toDyn msg)
 
-sendMsg :: Either Signal Dynamic -> Process -> IO ()
+sendMsg :: MonadIO m => Either Signal Dynamic -> Process -> m ()
 sendMsg msg = atomically . sendMsgSTM msg
 
 sendMsgSTM :: Either Signal Dynamic -> Process -> STM ()
@@ -171,22 +172,25 @@ sendMsgSTM msg Process{..} = writeTQueue mailbox msg
 waitForSTM :: Process -> STM ()
 waitForSTM = check . not <=< isRunningSTM
 
-waitFor :: Process -> IO ()
+waitFor :: MonadIO m => Process -> m ()
 waitFor = atomically . waitForSTM
 
 receiveMsgSTM :: Process -> STM (Either Signal Dynamic)
 receiveMsgSTM = readTQueue . mailbox
 
-receiveMsg :: IO (Either Signal Dynamic)
+receiveMsg :: (MonadBase IO m, MonadIO m)
+           => m (Either Signal Dynamic)
 receiveMsg = myProcess >>= atomically . receiveMsgSTM
 
 requeue :: [Either Signal Dynamic] -> Process -> STM ()
 requeue xs Process{..} = mapM_ (unGetTQueue mailbox) xs
 
-handle :: MonadIO m => [Handle m] -> m ()
+handle :: (MonadBase IO m, MonadIO m)
+       => [Handle m]
+       -> m ()
 handle hs = do
-    me <- liftIO myProcess
-    action <- liftIO . atomically $ go me []
+    me <- myProcess
+    action <- atomically $ go me []
     action
   where
     go me acc = do
@@ -215,7 +219,9 @@ handle hs = do
     handle (Left s) _ =
         Nothing
 
-receiveDynMatch :: (Dynamic -> Bool) -> IO Dynamic
+receiveDynMatch :: (MonadBase IO m, MonadIO m)
+                => (Dynamic -> Bool)
+                -> m Dynamic
 receiveDynMatch f = do
     me <- myProcess
     atomically $ go [] me
@@ -230,10 +236,13 @@ receiveDynMatch f = do
         then requeue xs me >> return x
         else go (Right x : xs) me
 
-receiveDyn :: IO Dynamic
+receiveDyn :: (MonadBase IO m, MonadIO m)
+           => m Dynamic
 receiveDyn = receiveDynMatch $ const True
 
-receiveMatch :: Typeable msg => (msg -> Bool) -> IO msg
+receiveMatch :: (MonadBase IO m, MonadIO m, Typeable msg)
+             => (msg -> Bool)
+             -> m msg
 receiveMatch f = do
     d <- receiveDynMatch g
     case fromDynamic d of
@@ -244,13 +253,17 @@ receiveMatch f = do
         Just x  -> f x
         Nothing -> False
 
-receive :: Typeable msg => IO msg
+receive :: (MonadBase IO m, MonadIO m, Typeable msg)
+        => m msg
 receive = receiveMatch (const True)
 
-stop :: Process -> IO ()
-stop = sendMsg $ Left Stop
+stopSTM :: Process -> STM ()
+stopSTM = sendMsgSTM $ Left Stop
 
-myProcess :: IO Process
+stop :: MonadIO m => Process -> m ()
+stop = atomically . stopSTM
+
+myProcess :: (MonadBase IO m, MonadIO m) => m Process
 myProcess = do
     tid <- myThreadId
     threadProcess tid
@@ -259,27 +272,32 @@ threadProcessSTM :: ThreadId -> STM Process
 threadProcessSTM tid = do
     pmap <- readTVar processMap
     case Map.lookup tid pmap of
-        Nothing -> throwSTM $ ProcessNotFound tid
+        Nothing -> newProcessSTM tid
         Just p  -> return p
 
-threadProcess :: ThreadId -> IO Process
-threadProcess tid = do
-    pmap <- readTVarIO processMap
-    case Map.lookup tid pmap of
-        Nothing -> throwIO $ ProcessNotFound tid
-        Just p  -> return p
+threadProcess :: (MonadBase IO m, MonadIO m)
+              => ThreadId
+              -> m Process
+threadProcess = atomically . threadProcessSTM
 
-query :: (Typeable a, Typeable b) => a -> Process -> IO b
+query :: (MonadBase IO m, MonadIO m)
+      => (Typeable a, Typeable b)
+      => a
+      -> Process
+      -> m b
 query q remote = do
     me <- myProcess
     send (me, q) remote
     snd <$> receiveMatch ((== remote) . fst)
 
-getRequest :: Typeable a
-           => IO (Process, a)
+getRequest :: (MonadBase IO m, MonadIO m, Typeable a)
+           => m (Process, a)
 getRequest = receive
 
-sendResponse :: Typeable a => a -> Process -> IO ()
+sendResponse :: (MonadBase IO m, MonadIO m, Typeable a)
+             => a
+             -> Process
+             -> m ()
 sendResponse x p = do
     me <- myProcess
     send (me, x) p
@@ -295,7 +313,8 @@ didCleanExit p@Process{..} = do
             Right _ -> return True
             Left _  -> return False
 
-getProcessErrorSTM :: Process -> STM (Maybe SomeException)
+getProcessErrorSTM :: Process
+                   -> STM (Maybe SomeException)
 getProcessErrorSTM p@Process{..} = do
     r <- isRunningSTM p
     if r
@@ -306,6 +325,20 @@ getProcessErrorSTM p@Process{..} = do
             Left e  -> return $ Just e
             Right _ -> return Nothing
 
-getProcessError :: Process
-                -> IO (Maybe SomeException)
+getProcessError :: MonadIO m
+                => Process
+                -> m (Maybe SomeException)
 getProcessError = atomically . getProcessErrorSTM
+
+
+atomically :: MonadIO m => STM a -> m a
+atomically = liftIO . STM.atomically
+
+newEmptyTMVarIO :: MonadIO m => m (TMVar a)
+newEmptyTMVarIO = liftIO STM.newEmptyTMVarIO
+
+newTVarIO :: MonadIO m => a -> m (TVar a)
+newTVarIO = liftIO . STM.newTVarIO
+
+readTVarIO :: MonadIO m => TVar a -> m a
+readTVarIO = liftIO . STM.readTVarIO

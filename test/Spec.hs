@@ -1,8 +1,9 @@
+{-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 import           Control.Concurrent
 import           Control.Concurrent.NQE
-import           Control.Concurrent.STM
+import           Control.Concurrent.STM (readTVar)
 import           Control.Exception      ()
 import           Control.Monad
 import           Control.Monad.Catch    (MonadThrow)
@@ -41,11 +42,24 @@ client = runTCPClient cs
     cs = clientSettings 34828 "127.0.0.1"
 
 pongServer :: AppData -> IO ()
-pongServer ad = asProcess $ withNet decoder encoder ad $ \p -> forever $ do
-    msg <- receive
-    case msg of
-        ("ping" :: Text) -> send ("pong\n" :: Text) p
-        _                -> error "Expected ping"
+pongServer ad =
+    withNet src snk go
+  where
+    go p = do
+        msg <- receive
+        case msg of
+            ("ping" :: Text) -> send ("pong\n" :: Text) p
+            _                -> return ()
+    src = appSource ad =$= decoder
+    snk = encoder =$= appSink ad
+
+pongClient :: IO Text
+pongClient = client $ \ad ->
+    let src = appSource ad =$= decoder
+        snk = encoder =$= appSink ad
+    in withNet src snk $ \p -> do
+        send ("ping\n" :: Text) p
+        receive
 
 dispatch :: Process -> IO ()
 dispatch p = forever $ handle
@@ -70,19 +84,16 @@ main = do
     hspec $ do
         describe "two communicating processes" $ do
             it "exchange ping/pong messages" $ do
-                ans <- asProcess $
-                    withProcess pong $ query Ping
+                ans <- withProcess pong $ query Ping
                 ans `shouldBe` Pong
             it "setup a link" $ do
-                lns <- asProcess $ do
-                    withProcess pong $ \s -> do
-                        link s
-                        atomically $ readTVar $ links s
+                lns <- withProcess pong $ \s -> do
+                    link s
+                    atomically $ readTVar $ links s
                 tid <- myThreadId
                 map thread lns `shouldBe` [tid]
             it "linked and stopped" $ do
-                (sig, tid) <- asProcess $
-                    withProcess pong $ \s -> do
+                (sig, tid) <- withProcess pong $ \s -> do
                     link s
                     stop s
                     sig <- receiveMsg
@@ -91,7 +102,7 @@ main = do
                     Left (Died tid) -> return ()
                     _               -> error "Unexpected signal"
             it "dispatch multiple types of message" $ do
-                types <- asProcess $ do
+                types <- do
                     me <- myProcess
                     withProcess (dispatch me) $ \d -> do
                         send ("This is a string" :: String) d
@@ -100,7 +111,7 @@ main = do
                         replicateM 3 receive
                 types `shouldBe` (["string", "int", "default"] :: [String])
             it "process messages out of order if needed" $ do
-                messages <- asProcess $ do
+                messages <- do
                     me <- myProcess
                     withProcess (ooo me) $ \o -> do
                         send (2 :: Int) o
@@ -109,11 +120,6 @@ main = do
                         replicateM 3 receive
                 messages `shouldBe` ([1, 2, 3] :: [Int])
         describe "network process" $ do
-            it "responds to a ping" $
-                asProcess $ client $ \ad ->
-                withNet decoder encoder ad $ \p -> do
-                send ("ping\n" :: Text) p
-                msg <- receive
-                case msg of
-                    ("pong" :: Text) -> return ()
-                    _                -> error "Expected pong"
+            it "responds to a ping" $ do
+                msg <- pongClient
+                msg `shouldBe` ("pong" :: Text)

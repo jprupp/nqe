@@ -1,35 +1,36 @@
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE Rank2Types            #-}
 module Control.Concurrent.NQE.Network where
 
+import           Control.Concurrent.Lifted      (fork, killThread)
 import           Control.Concurrent.NQE.Process
-import           Control.Monad.IO.Class         (liftIO)
-import           Data.ByteString                (ByteString)
-import           Data.Conduit                   (Conduit (..), awaitForever,
-                                                 yield, ($$), (=$=))
-import           Data.Conduit.Network           (AppData, appSink, appSource)
+import           Control.Exception.Lifted       (bracket)
+import           Control.Monad                  (forever)
+import           Control.Monad.Base             (MonadBase)
+import           Control.Monad.IO.Class         (MonadIO)
+import           Control.Monad.Trans.Control    (MonadBaseControl)
+import           Data.Conduit                   (Consumer, Producer,
+                                                 awaitForever, yield, ($$))
 import           Data.Typeable                  (Typeable)
 
-listener :: Typeable i
-         => AppData
-         -> Conduit ByteString IO i
-         -> Process
-         -> IO ()
-listener ad c p =
-    appSource ad =$= c $$ awaitForever (\x -> liftIO $ send x p)
+fromProducer :: (MonadIO m, Typeable a)
+             => Producer m a
+             -> Process  -- ^ will receive all messages
+             -> m ()
+fromProducer src p = src $$ awaitForever (`send` p)
 
-sender :: Typeable o
-       => AppData
-       -> Conduit o IO ByteString
-       -> IO ()
-sender ad c = (liftIO receive >>= yield) =$= c $$ appSink ad
+toConsumer :: (MonadBase IO m, MonadIO m, Typeable a)
+           => Consumer a m b
+           -> m b
+toConsumer snk = forever (receive >>= yield) $$ snk
 
-withNet :: (Typeable i, Typeable o)
-        => Conduit ByteString IO i  -- ^ incoming conduit
-        -> Conduit o IO ByteString  -- ^ outgoing conduit
-        -> AppData
-        -> (Process -> IO a)
-        -> IO a
-withNet i o ad go =
-    myProcess >>= \me ->
-    withProcess (listener ad i me) $ \_ ->
-    withProcess (sender ad o) go
+withNet :: (MonadIO m, MonadBaseControl IO m, Typeable a, Typeable b)
+        => Producer m a
+        -> Consumer b m ()
+        -> (Process -> m c)  -- ^ run in current thread, process is consumer
+        -> m c
+withNet src snk f = do
+    me <- myProcess
+    bracket (fork $ fromProducer src me) killThread $ \_ ->
+        withProcess (toConsumer snk) f
