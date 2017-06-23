@@ -32,5 +32,5 @@ withNet :: (MonadIO m, MonadBaseControl IO m, Typeable a, Typeable b)
         -> m c
 withNet src snk f = do
     me <- myProcess
-    bracket (fork $ fromProducer src me) killThread $ \_ ->
+    bracket (fork $ fromProducer src me) killThread $ const $
         withProcess (fromConsumer snk) f

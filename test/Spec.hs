@@ -22,9 +22,7 @@ data Ping = Ping deriving (Eq, Show, Typeable)
 data Pong = Pong deriving (Eq, Show, Typeable)
 
 pong :: IO ()
-pong = forever $ do
-    (p, Ping) <- getRequest
-    sendResponse Pong p
+pong = forever $ respond $ \Ping -> return Pong
 
 encoder :: MonadThrow m => Conduit Text m ByteString
 encoder = encode utf8
@@ -72,9 +70,9 @@ pongClient source sink =
 
 dispatch :: Process -> IO ()
 dispatch p = forever $ handle
-    [ Handle $ \(i :: Int) -> send ("int" :: String) p
-    , Handle $ \(t :: String) -> send ("string" :: String) p
-    , HandleDefault $ \_ -> send ("default" :: String) p
+    [ Case $ \(i :: Int) -> send ("int" :: String) p
+    , Case $ \(t :: String) -> send ("string" :: String) p
+    , Default $ const $ send ("default" :: String) p
     ]
 
 ooo :: Process -> IO ()
@@ -129,6 +127,6 @@ main = hspec $ do
     describe "network process" $ do
         it "responds to a ping" $ do
             (source1, sink1, source2, sink2) <- conduits
-            msg <- withProcess (pongServer source1 sink1) $ \_ ->
+            msg <- withProcess (pongServer source1 sink1) $ const $
                 pongClient source2 sink2
             msg `shouldBe` ("pong" :: Text)

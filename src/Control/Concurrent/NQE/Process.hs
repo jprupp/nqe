@@ -33,16 +33,16 @@ type ProcessMap = Map ThreadId Process
 
 data Handle m
     = forall a. Typeable a =>
-      HandleMatch
+      Case
+      { getHandle :: a -> m () }
+    | forall a. Typeable a =>
+      Match
       { getHandle :: a -> m ()
       , getMatch  :: a -> Bool
       }
-    | forall a. Typeable a =>
-      Handle
-      { getHandle :: a -> m () }
-    | HandleSig
+    | Sig
       { getSignal :: Signal -> m () }
-    | HandleDefault
+    | Default
       { getDefault :: Dynamic -> m () }
 
 data Process = Process
@@ -202,19 +202,19 @@ handle hs = do
                     Left e  -> return $ liftIO $ throwIO e
                     Right _ -> go me (msgE : acc)
     actionM msgE = listToMaybe $ catMaybes $ map (handle msgE) hs
-    handle (Right msg) (HandleMatch f t) =
+    handle (Right msg) (Match f t) =
         case fromDynamic msg of
             Nothing -> Nothing
             Just m -> if t m
                       then Just $ f m
                       else Nothing
-    handle (Right msg) (Handle f) =
+    handle (Right msg) (Case f) =
         case fromDynamic msg of
             Nothing -> Nothing
             Just m  -> Just $ f m
-    handle (Right msg) (HandleDefault f) =
+    handle (Right msg) (Default f) =
         Just $ f msg
-    handle (Left s) (HandleSig f) =
+    handle (Left s) (Sig f) =
         Just $ f s
     handle (Left s) _ =
         Nothing
@@ -290,17 +290,14 @@ query q remote = do
     send (me, q) remote
     snd <$> receiveMatch ((== remote) . fst)
 
-getRequest :: (MonadBase IO m, MonadIO m, Typeable a)
-           => m (Process, a)
-getRequest = receive
-
-sendResponse :: (MonadBase IO m, MonadIO m, Typeable a)
-             => a
-             -> Process
-             -> m ()
-sendResponse x p = do
+respond :: (MonadBase IO m, MonadIO m, Typeable a, Typeable b)
+        => (a -> m b)
+        -> m ()
+respond f = do
     me <- myProcess
-    send (me, x) p
+    (p, q) <- receive
+    r <- f q
+    send (me, r) p
 
 didCleanExit :: Process -> STM Bool
 didCleanExit p@Process{..} = do
