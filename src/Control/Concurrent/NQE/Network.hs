@@ -20,10 +20,10 @@ fromProducer :: (MonadIO m, Typeable a)
              -> m ()
 fromProducer src p = src $$ awaitForever (`send` p)
 
-toConsumer :: (MonadBase IO m, MonadIO m, Typeable a)
-           => Consumer a m b
-           -> m b
-toConsumer snk = forever (receive >>= yield) $$ snk
+fromConsumer :: (MonadBase IO m, MonadIO m, Typeable a)
+             => Consumer a m b
+             -> m b
+fromConsumer snk = forever (receive >>= yield) $$ snk
 
 withNet :: (MonadIO m, MonadBaseControl IO m, Typeable a, Typeable b)
         => Producer m a
@@ -33,4 +33,4 @@ withNet :: (MonadIO m, MonadBaseControl IO m, Typeable a, Typeable b)
 withNet src snk f = do
     me <- myProcess
     bracket (fork $ fromProducer src me) killThread $ \_ ->
-        withProcess (toConsumer snk) f
+        withProcess (fromConsumer snk) f
