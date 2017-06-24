@@ -32,7 +32,10 @@ type Mailbox = TQueue (Either Signal Dynamic)
 type ProcessMap = Map ThreadId Process
 
 data Handle m
-    = forall a. Typeable a =>
+    = forall a b. (Typeable a, Typeable b) =>
+      Query
+      { answerIt :: a -> m b }
+    | forall a. Typeable a =>
       Case
       { getHandle :: a -> m () }
     | forall a. Typeable a =>
@@ -212,6 +215,13 @@ handle hs = do
         case fromDynamic msg of
             Nothing -> Nothing
             Just m  -> Just $ f m
+    handle (Right msg) (Query f) =
+        case fromDynamic msg of
+            Nothing -> Nothing
+            Just (p, q) -> Just $ do
+                r <- f q
+                me <- myProcess
+                send (me, r) p
     handle (Right msg) (Default f) =
         Just $ f msg
     handle (Left s) (Sig f) =
