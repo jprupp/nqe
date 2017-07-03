@@ -14,6 +14,8 @@ import           Data.Conduit                   (Consumer, Producer,
                                                  awaitForever, yield, ($$))
 import           Data.Typeable                  (Typeable)
 
+type Remote = Process
+
 fromProducer :: (MonadIO m, Typeable a)
              => Producer m a
              -> Process  -- ^ will receive all messages
@@ -28,7 +30,7 @@ fromConsumer snk = forever (receive >>= yield) $$ snk
 withNet :: (MonadIO m, MonadBaseControl IO m, Typeable a, Typeable b)
         => Producer m a
         -> Consumer b m ()
-        -> (Process -> m c)  -- ^ run in current thread, process is consumer
+        -> (Remote -> m c)  -- ^ run in this thread
         -> m c
 withNet src snk f = do
     me <- myProcess
