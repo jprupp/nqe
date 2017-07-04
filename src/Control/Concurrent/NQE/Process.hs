@@ -199,35 +199,35 @@ handle hs = do
     go me acc = do
         msgE <- receiveMsgSTM me
         case actionM msgE of
-            Just action -> requeue acc me >> return action
+            Just action ->
+                requeue acc me >> return action
             Nothing ->
                 case msgE of
                     Left e  -> return $ liftIO $ throwIO e
                     Right _ -> go me (msgE : acc)
-    actionM msgE = listToMaybe $ catMaybes $ map (handle msgE) hs
-    handle (Right msg) (Match f t) =
-        case fromDynamic msg of
-            Nothing -> Nothing
-            Just m -> if t m
-                      then Just $ f m
-                      else Nothing
-    handle (Right msg) (Case f) =
-        case fromDynamic msg of
-            Nothing -> Nothing
-            Just m  -> Just $ f m
-    handle (Right msg) (Query f) =
-        case fromDynamic msg of
-            Nothing -> Nothing
-            Just (p, q) -> Just $ do
-                r <- f q
-                me <- myProcess
-                send (me, r) p
-    handle (Right msg) (Default f) =
-        Just $ f msg
-    handle (Left s) (Sig f) =
-        Just $ f s
-    handle (Left s) _ =
-        Nothing
+    actionM msgE = listToMaybe $ catMaybes $ map (h msgE) hs
+    h (Right msg) x =
+        case x of
+            Match f t ->
+                fromDynamic msg >>= \m ->
+                    if t m
+                    then Just $ f m
+                    else Nothing
+            Case f ->
+                fromDynamic msg >>= Just . f
+            Query f ->
+                fromDynamic msg >>= \(p, q) ->
+                Just $ do
+                    r <- f q
+                    me <- myProcess
+                    send (me, r) p
+            Default f ->
+                Just $ f msg
+            _ -> Nothing
+    h (Left s) x =
+        case x of
+            Sig f -> Just $ f s
+            _ -> Nothing
 
 receiveDynMatch :: (MonadBase IO m, MonadIO m)
                 => (Dynamic -> Bool)
