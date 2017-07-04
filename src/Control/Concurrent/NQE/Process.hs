@@ -5,7 +5,8 @@
 {-# OPTIONS_GHC -fno-full-laziness #-}
 module Control.Concurrent.NQE.Process where
 
-import           Control.Concurrent.Lifted   (ThreadId, forkFinally, myThreadId)
+import           Control.Concurrent.Lifted   (ThreadId, forkFinally, myThreadId,
+                                              threadDelay)
 import           Control.Concurrent.STM      (STM, TMVar, TQueue, TVar, check,
                                               isEmptyTMVar, modifyTVar,
                                               newEmptyTMVar, newTQueue, newTVar,
@@ -16,7 +17,7 @@ import           Control.Concurrent.STM      (STM, TMVar, TQueue, TVar, check,
 import qualified Control.Concurrent.STM      as STM
 import           Control.Exception.Lifted    (Exception, SomeException, bracket,
                                               throwIO)
-import           Control.Monad               (filterM, forM, when, (<=<))
+import           Control.Monad               (filterM, forM, void, when, (<=<))
 import           Control.Monad.Base          (MonadBase)
 import           Control.Monad.IO.Class      (MonadIO, liftIO)
 import           Control.Monad.Trans.Control (MonadBaseControl)
@@ -160,6 +161,12 @@ unLink :: (MonadBase IO m, MonadIO m)
 unLink Process{..} = myProcess >>= \me ->
     atomically $ modifyTVar links $ filter (/= me)
 
+asyncDelayed :: (MonadIO m, MonadBaseControl IO m)
+             => Int
+             -> m ()
+             -> m Process
+asyncDelayed t f = startProcess $ threadDelay (t * 1000 * 1000) >> f
+
 send :: (MonadIO m, Typeable msg) => msg -> Process -> m ()
 send msg = atomically . sendSTM msg
 
@@ -227,7 +234,7 @@ handle hs = do
     h (Left s) x =
         case x of
             Sig f -> Just $ f s
-            _ -> Nothing
+            _     -> Nothing
 
 receiveDynMatch :: (MonadBase IO m, MonadIO m)
                 => (Dynamic -> Bool)
