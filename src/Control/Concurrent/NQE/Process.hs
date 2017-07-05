@@ -23,6 +23,7 @@ import           Control.Monad.IO.Class      (MonadIO, liftIO)
 import           Control.Monad.Trans.Control (MonadBaseControl)
 import           Data.Dynamic                (Dynamic, Typeable, fromDynamic,
                                               toDyn)
+import           Data.Function               (on)
 import           Data.List                   (nub)
 import           Data.Map.Strict             (Map)
 import qualified Data.Map.Strict             as Map
@@ -57,7 +58,10 @@ data Process = Process
     } deriving Typeable
 
 instance Eq Process where
-    a == b = thread a == thread b
+    (==) = (==) `on` thread
+
+instance Ord Process where
+    compare = compare `on` thread
 
 instance Show Process where
     showsPrec d Process{..} =
