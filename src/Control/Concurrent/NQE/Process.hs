@@ -169,8 +169,13 @@ unLink Process{..} = myProcess >>= \me ->
 asyncDelayed :: (MonadIO m, MonadBaseControl IO m)
              => Int
              -> m ()
-             -> m Process
-asyncDelayed t f = startProcess $ threadDelay (t * 1000 * 1000) >> f
+             -> m ()
+asyncDelayed t f = void $ do
+    me <- myProcess
+    void $ forkFinally (threadDelay (t * 1000 * 1000) >> f) $ \e ->
+        case e of
+            Left ex -> ex `kill` me
+            Right () -> return ()
 
 send :: (MonadIO m, Typeable msg) => msg -> Process -> m ()
 send msg = atomically . sendSTM msg
