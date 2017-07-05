@@ -11,9 +11,9 @@ import           Control.Monad.State
 import           Data.ByteString        (ByteString)
 import           Data.Conduit
 import           Data.Conduit.Network
-import           Data.Conduit.TMChan
 import           Data.Conduit.Text      (decode, encode, utf8)
 import qualified Data.Conduit.Text      as CT
+import           Data.Conduit.TMChan
 import           Data.Dynamic
 import           Data.Text              (Text)
 import           Test.Hspec

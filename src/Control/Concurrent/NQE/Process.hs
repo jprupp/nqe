@@ -16,7 +16,7 @@ import           Control.Concurrent.STM      (STM, TMVar, TQueue, TVar, check,
                                               writeTVar)
 import qualified Control.Concurrent.STM      as STM
 import           Control.Exception.Lifted    (Exception, SomeException, bracket,
-                                              throwIO)
+                                              throwIO, toException)
 import           Control.Monad               (filterM, forM, void, when, (<=<))
 import           Control.Monad.Base          (MonadBase)
 import           Control.Monad.IO.Class      (MonadIO, liftIO)
@@ -67,8 +67,9 @@ instance Show Process where
         showString " }"
 
 data Signal = Stop
-            | Died { getThread :: ThreadId }
-            deriving (Show, Eq, Typeable)
+            | Died { getProcess :: Process }
+            | Error { getError :: SomeException }
+            deriving (Show, Typeable)
 
 instance Exception Signal
 
@@ -113,7 +114,7 @@ cleanupSTM :: Process
            -> Either SomeException ()
            -> STM ()
 cleanupSTM p@Process{..} ret = do
-    readTVar links >>= mapM_ (sendMsgSTM $ Left $ Died thread)
+    readTVar links >>= mapM_ (sendMsgSTM $ Left $ Died p)
     putTMVar status ret
     modifyTVar processMap $ Map.delete thread
 
@@ -145,7 +146,7 @@ linkSTM me remote = do
     if r then add else dead
   where
     add = modifyTVar (links remote) $ (me :) . filter (/= me)
-    dead = sendMsgSTM (Left $ Died $ thread remote) me
+    dead = sendMsgSTM (Left $ Died remote) me
 
 -- | Make this process a slave of a remote process.
 link :: (MonadBase IO m, MonadIO m)
@@ -280,6 +281,12 @@ stopSTM = sendMsgSTM $ Left Stop
 stop :: MonadIO m => Process -> m ()
 stop = atomically . stopSTM
 
+killSTM :: Exception e => e -> Process -> STM ()
+killSTM e = sendMsgSTM $ Left $ Error $ toException e
+
+kill :: (MonadIO m, Exception e) => e -> Process -> m ()
+kill e = atomically . killSTM e
+
 myProcess :: (MonadBase IO m, MonadIO m) => m Process
 myProcess = do
     tid <- myThreadId
@@ -343,7 +350,6 @@ getProcessError :: MonadIO m
                 => Process
                 -> m (Maybe SomeException)
 getProcessError = atomically . getProcessErrorSTM
-
 
 atomically :: MonadIO m => STM a -> m a
 atomically = liftIO . STM.atomically
