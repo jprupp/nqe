@@ -5,6 +5,7 @@
 {-# OPTIONS_GHC -fno-full-laziness #-}
 module Control.Concurrent.NQE.Process where
 
+import           Control.Applicative         ((<|>))
 import           Control.Concurrent.Lifted   (ThreadId, forkFinally, myThreadId,
                                               threadDelay)
 import           Control.Concurrent.STM      (STM, TMVar, TQueue, TVar, check,
@@ -25,7 +26,6 @@ import           Data.Dynamic                (Dynamic, Typeable, fromDynamic,
 import           Data.Function               (on)
 import           Data.Map.Strict             (Map)
 import qualified Data.Map.Strict             as Map
-import           Data.Maybe                  (listToMaybe, mapMaybe)
 import           System.IO.Unsafe            (unsafePerformIO)
 
 type Mailbox = TQueue (Either Signal Dynamic)
@@ -210,33 +210,31 @@ handle hs = do
     me <- myProcess
     join $ atomically $ go me []
   where
-    go me acc = do
-        msgE <- receiveMsgSTM me
-        case actionM msgE of
-            Just action ->
-                requeue acc me >> return action
-            Nothing ->
-                case msgE of
-                    Left e  -> return $ liftIO $ throwIO e
-                    Right _ -> go me (msgE : acc)
-    actionM msgE = listToMaybe $ mapMaybe (h msgE) hs
+    go me acc = receiveMsgSTM me >>= \msg -> case action msg of
+        Just act ->
+            requeue acc me >> return act
+        Nothing -> case msg of
+            Left e  -> return $ throwIO e
+            Right _ -> go me (msg : acc)
+    action msg = foldl (g msg) Nothing hs
+    g msg acc x = acc <|> h msg x
     h (Right msg) x =
         case x of
-            Match f t ->
-                fromDynamic msg >>= \m ->
-                    if t m
-                    then Just $ f m
+            Match f t -> do
+                m <- fromDynamic msg
+                if t m
+                    then return $ f m
                     else Nothing
             Case f ->
-                fromDynamic msg >>= Just . f
-            Query f ->
-                fromDynamic msg >>= \(p, q) ->
-                Just $ do
+                f <$> fromDynamic msg
+            Query f -> do
+                (p, q) <- fromDynamic msg
+                return $ do
                     r <- f q
                     me <- myProcess
                     send (me, r) p
             Default f ->
-                Just $ f msg
+                return $ f msg
             _ -> Nothing
     h (Left s) x =
         case x of
