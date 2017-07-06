@@ -12,22 +12,20 @@ import           Control.Concurrent.STM      (STM, TMVar, TQueue, TVar, check,
                                               newEmptyTMVar, newTQueue, newTVar,
                                               putTMVar, readTMVar, readTMVar,
                                               readTQueue, readTVar, throwSTM,
-                                              unGetTQueue, writeTQueue,
-                                              writeTVar)
+                                              unGetTQueue, writeTQueue)
 import qualified Control.Concurrent.STM      as STM
 import           Control.Exception.Lifted    (Exception, SomeException, bracket,
                                               throwIO, toException)
-import           Control.Monad               (filterM, forM, void, when, (<=<))
+import           Control.Monad               (join, void, (<=<))
 import           Control.Monad.Base          (MonadBase)
 import           Control.Monad.IO.Class      (MonadIO, liftIO)
 import           Control.Monad.Trans.Control (MonadBaseControl)
 import           Data.Dynamic                (Dynamic, Typeable, fromDynamic,
                                               toDyn)
 import           Data.Function               (on)
-import           Data.List                   (nub)
 import           Data.Map.Strict             (Map)
 import qualified Data.Map.Strict             as Map
-import           Data.Maybe                  (catMaybes, listToMaybe)
+import           Data.Maybe                  (listToMaybe, mapMaybe)
 import           System.IO.Unsafe            (unsafePerformIO)
 
 type Mailbox = TQueue (Either Signal Dynamic)
@@ -128,8 +126,8 @@ withProcess :: (MonadBaseControl IO m, MonadIO m)
             => m ()              -- ^ action on new process
             -> (Process -> m a)  -- ^ action on current process
             -> m a
-withProcess f go =
-    bracket acquire release go
+withProcess f =
+    bracket acquire release
   where
     acquire = startProcess f
     release p = do
@@ -174,7 +172,7 @@ asyncDelayed t f = void $ do
     me <- myProcess
     void $ forkFinally (threadDelay (t * 1000 * 1000) >> f) $ \e ->
         case e of
-            Left ex -> ex `kill` me
+            Left ex  -> ex `kill` me
             Right () -> return ()
 
 send :: (MonadIO m, Typeable msg) => msg -> Process -> m ()
@@ -210,8 +208,7 @@ handle :: (MonadBase IO m, MonadIO m)
        -> m ()
 handle hs = do
     me <- myProcess
-    action <- atomically $ go me []
-    action
+    join $ atomically $ go me []
   where
     go me acc = do
         msgE <- receiveMsgSTM me
@@ -222,7 +219,7 @@ handle hs = do
                 case msgE of
                     Left e  -> return $ liftIO $ throwIO e
                     Right _ -> go me (msgE : acc)
-    actionM msgE = listToMaybe $ catMaybes $ map (h msgE) hs
+    actionM msgE = listToMaybe $ mapMaybe (h msgE) hs
     h (Right msg) x =
         case x of
             Match f t ->
