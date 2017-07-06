@@ -16,7 +16,7 @@ import           Control.Concurrent.STM      (STM, TMVar, TQueue, TVar, check,
                                               unGetTQueue, writeTQueue)
 import qualified Control.Concurrent.STM      as STM
 import           Control.Exception.Lifted    (Exception, SomeException, bracket,
-                                              throwIO, toException)
+                                              throwIO, toException, throwTo)
 import           Control.Monad               (join, void, (<=<))
 import           Control.Monad.Base          (MonadBase)
 import           Control.Monad.IO.Class      (MonadIO, liftIO)
@@ -77,6 +77,7 @@ instance Exception Signal
 
 data ProcessException
     = CouldNotCastDynamic
+    | DependentActionEnded
     deriving (Show, Typeable)
 
 instance Exception ProcessException
@@ -131,7 +132,7 @@ withProcess f =
   where
     acquire = startProcess f
     release p = do
-        atomically $ stopSTM p
+        throwTo (thread p) DependentActionEnded
         waitFor p
 
 isRunningSTM :: Process -> STM Bool
