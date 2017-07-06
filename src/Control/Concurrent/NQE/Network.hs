@@ -3,14 +3,13 @@
 {-# LANGUAGE Rank2Types            #-}
 module Control.Concurrent.NQE.Network where
 
-import           Control.Concurrent.Lifted      (fork, killThread)
 import           Control.Concurrent.NQE.Process
-import           Control.Exception.Lifted       (AsyncException (..), Exception,
-                                                 SomeException, bracket, catch,
-                                                 fromException)
-import           Control.Monad                  (forever)
+import           Control.Concurrent.STM         (check, isEmptyTQueue)
+import           Control.Exception.Lifted       (Exception, SomeException,
+                                                 catch, finally)
+import           Control.Monad                  (forever, (<=<))
 import           Control.Monad.Base             (MonadBase)
-import           Control.Monad.IO.Class         (MonadIO)
+import           Control.Monad.IO.Class         (MonadIO, liftIO)
 import           Control.Monad.Trans.Control    (MonadBaseControl)
 import           Data.Conduit                   (Consumer, Producer,
                                                  awaitForever, yield, ($$))
@@ -31,28 +30,18 @@ fromProducer :: (MonadIO m,
              => Producer m a
              -> Process  -- ^ will receive all messages
              -> m ()
-fromProducer src p =
-    go `catch` e
-  where
-    go = src $$ awaitForever (`send` p)
-    e ex = case fromException (ex :: SomeException) of
-        Just ThreadKilled -> return ()  -- gracefully die
-        _                 -> ProducerDied ex `kill` p
+fromProducer src p = src $$ awaitForever (`send` p)
 
 fromConsumer :: (MonadBase IO m,
                  MonadBaseControl IO m,
                  MonadIO m,
                  Typeable a)
              => Consumer a m ()
-             -> Process  -- ^ stop when done
              -> m ()
-fromConsumer snk p =
-    go `catch` e
-  where
-    go = forever (receive >>= yield) $$ snk
-    e ex = case fromException (ex :: SomeException) of
-        Just Stop -> return ()  -- gracefully die
-        _         -> ConsumerDied ex `kill` p
+fromConsumer snk = forever (receive >>= yield) $$ snk
+
+flush :: MonadIO m => Process -> m ()
+flush p = atomically $ check =<< mailboxEmptySTM p
 
 withNet :: (MonadIO m,
             MonadBaseControl IO m,
@@ -64,5 +53,10 @@ withNet :: (MonadIO m,
         -> m c
 withNet src snk f = do
     me <- myProcess
-    bracket (fork $ fromProducer src me) killThread $ const $
-        withProcess (fromConsumer snk me) f
+    withProcess (fromProducer src me) $ \prod -> do
+        link prod
+        withProcess (fromConsumer snk) $ \cons -> do
+            link cons
+            ret <- f cons
+            flush cons
+            return ret

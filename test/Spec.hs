@@ -7,15 +7,14 @@ import           Control.Concurrent.STM (readTVar)
 import           Control.Exception      ()
 import           Control.Monad
 import           Control.Monad.Catch    (MonadThrow)
-import           Control.Monad.State
 import           Data.ByteString        (ByteString)
 import           Data.Conduit
-import           Data.Conduit.Network
 import           Data.Conduit.Text      (decode, encode, utf8)
 import qualified Data.Conduit.Text      as CT
 import           Data.Conduit.TMChan
 import           Data.Dynamic
-import           Data.Text              (Text)
+import           Data.Monoid
+import           Data.Text              (Text, unpack)
 import           Test.Hspec
 
 data Ping = Ping deriving (Eq, Show, Typeable)
@@ -36,8 +35,8 @@ conduits :: IO ( Source IO ByteString
                , Sink ByteString IO ()
                )
 conduits = do
-    inChan <- atomically $ newTBMChan 16
-    outChan <- atomically $ newTBMChan 16
+    inChan <- atomically $ newTBMChan 2048
+    outChan <- atomically $ newTBMChan 2048
     return ( sourceTBMChan inChan
            , sinkTBMChan outChan True
            , sourceTBMChan outChan
@@ -70,8 +69,8 @@ pongClient source sink =
 
 dispatch :: Process -> IO ()
 dispatch p = forever $ handle
-    [ Case $ \(i :: Int) -> send ("int" :: String) p
-    , Case $ \(t :: String) -> send ("string" :: String) p
+    [ Case $ \(_ :: Int) -> send ("int" :: String) p
+    , Case $ \(_ :: String) -> send ("string" :: String) p
     , Default $ const $ send ("default" :: String) p
     ]
 
@@ -98,13 +97,13 @@ main = hspec $ do
             tid <- myThreadId
             map thread lns `shouldBe` [tid]
         it "linked and stopped" $ do
-            (sig, tid) <- withProcess pong $ \s -> do
+            (sig, _) <- withProcess pong $ \s -> do
                 link s
                 stop s
                 sig <- receiveMsg
                 return (sig, thread s)
             case sig of
-                Left (Died tid) -> return ()
+                Left (Died _) -> return ()
                 _               -> error "Unexpected signal"
         it "dispatch multiple types of message" $ do
             types <- do

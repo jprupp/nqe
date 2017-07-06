@@ -9,14 +9,15 @@ import           Control.Applicative         ((<|>))
 import           Control.Concurrent.Lifted   (ThreadId, forkFinally, myThreadId,
                                               threadDelay)
 import           Control.Concurrent.STM      (STM, TMVar, TQueue, TVar, check,
-                                              isEmptyTMVar, modifyTVar,
-                                              newEmptyTMVar, newTQueue, newTVar,
-                                              putTMVar, readTMVar, readTMVar,
-                                              readTQueue, readTVar, throwSTM,
-                                              unGetTQueue, writeTQueue)
+                                              isEmptyTMVar, isEmptyTQueue,
+                                              modifyTVar, newEmptyTMVar,
+                                              newTQueue, newTVar, putTMVar,
+                                              readTMVar, readTMVar, readTQueue,
+                                              readTVar, throwSTM, unGetTQueue,
+                                              writeTQueue)
 import qualified Control.Concurrent.STM      as STM
 import           Control.Exception.Lifted    (Exception, SomeException, bracket,
-                                              throwIO, toException, throwTo)
+                                              throwIO, throwTo)
 import           Control.Monad               (join, void, (<=<))
 import           Control.Monad.Base          (MonadBase)
 import           Control.Monad.IO.Class      (MonadIO, liftIO)
@@ -70,7 +71,6 @@ instance Show Process where
 
 data Signal = Stop
             | Died { getProcess :: Process }
-            | Error { getError :: SomeException }
             deriving (Show, Typeable)
 
 instance Exception Signal
@@ -134,6 +134,12 @@ withProcess f =
     release p = do
         throwTo (thread p) DependentActionEnded
         waitFor p
+
+mailboxEmptySTM :: Process -> STM Bool
+mailboxEmptySTM Process{..} = isEmptyTQueue mailbox
+
+mailboxEmpty :: MonadIO m => Process -> m Bool
+mailboxEmpty = atomically . mailboxEmptySTM
 
 isRunningSTM :: Process -> STM Bool
 isRunningSTM Process{..} = isEmptyTMVar status
@@ -286,11 +292,8 @@ stopSTM = sendMsgSTM $ Left Stop
 stop :: MonadIO m => Process -> m ()
 stop = atomically . stopSTM
 
-killSTM :: Exception e => e -> Process -> STM ()
-killSTM e = sendMsgSTM $ Left $ Error $ toException e
-
-kill :: (MonadIO m, Exception e) => e -> Process -> m ()
-kill e = atomically . killSTM e
+kill :: (MonadIO m, MonadBase IO m, Exception e) => e -> Process -> m ()
+kill e p = throwTo (thread p) e
 
 myProcess :: (MonadBase IO m, MonadIO m) => m Process
 myProcess = do
