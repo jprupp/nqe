@@ -34,19 +34,19 @@ type ProcessMap = Map ThreadId Process
 data Handle m
     = forall a b. (Typeable a, Typeable b) =>
       Query
-      { answerIt :: a -> m b }
+          { answerIt :: a -> m b }
     | forall a. Typeable a =>
       Case
-      { getHandle :: a -> m () }
+          { getHandle :: a -> m () }
     | forall a. Typeable a =>
       Match
-      { getHandle :: a -> m ()
-      , getMatch  :: a -> Bool
-      }
+          { getHandle :: a -> m ()
+          , getMatch  :: a -> Bool
+          }
     | Sig
-      { getSignal :: Signal -> m () }
+          { getSignal :: Signal -> m () }
     | Default
-      { getDefault :: Dynamic -> m () }
+          { getDefault :: Dynamic -> m () }
 
 data Process = Process
     { thread  :: ThreadId
