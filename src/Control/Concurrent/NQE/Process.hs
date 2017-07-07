@@ -27,6 +27,7 @@ import           Data.Dynamic                (Dynamic, Typeable, fromDynamic,
 import           Data.Function               (on)
 import           Data.Map.Strict             (Map)
 import qualified Data.Map.Strict             as Map
+import           Data.Maybe                  (isNothing)
 import           System.IO.Unsafe            (unsafePerformIO)
 
 type Mailbox = TQueue (Either Signal Dynamic)
@@ -50,10 +51,10 @@ data Handle m
           { getDefault :: Dynamic -> m () }
 
 data Process = Process
-    { thread  :: ThreadId
-    , mailbox :: Mailbox
-    , links   :: TVar [Process]
-    , status  :: TMVar (Either SomeException ())
+    { thread  :: !ThreadId
+    , mailbox :: !Mailbox
+    , links   :: !(TVar [Process])
+    , status  :: !(TMVar (Maybe SomeException))
     } deriving Typeable
 
 instance Eq Process where
@@ -70,7 +71,9 @@ instance Show Process where
         showString " }"
 
 data Signal = Stop
-            | Died { getProcess :: Process }
+            | Died { signalProcess   :: !Process
+                   , signalException :: !(Maybe SomeException)
+                   }
             deriving (Show, Typeable)
 
 instance Exception Signal
@@ -117,9 +120,11 @@ cleanupSTM :: Process
            -> Either SomeException ()
            -> STM ()
 cleanupSTM p@Process{..} ret = do
-    readTVar links >>= mapM_ (sendMsgSTM $ Left $ Died p)
-    putTMVar status ret
+    readTVar links >>= mapM_ (sendMsgSTM $ Left $ Died p ex)
+    putTMVar status ex
     modifyTVar processMap $ Map.delete thread
+  where
+    ex = either Just (const Nothing) ret
 
 -- | Run another process while performing an action. Stop it when action
 -- completes.
@@ -155,7 +160,9 @@ linkSTM me remote = do
     if r then add else dead
   where
     add = modifyTVar (links remote) $ (me :) . filter (/= me)
-    dead = sendMsgSTM (Left $ Died remote) me
+    dead = do
+        ex <- getExceptionSTM remote
+        sendMsgSTM (Left $ Died remote ex) me
 
 -- | Make this process a slave of a remote process.
 link :: (MonadBase IO m, MonadIO m)
@@ -331,33 +338,25 @@ respond f = do
     r <- f q
     send (me, r) p
 
-didCleanExit :: Process -> STM Bool
-didCleanExit p@Process{..} = do
+hasException :: Process -> STM Bool
+hasException p@Process{..} = do
     r <- isRunningSTM p
     if r
         then return False
-        else do
-        s <- readTMVar status
-        case s of
-            Right _ -> return True
-            Left _  -> return False
+        else isNothing <$> readTMVar status
 
-getProcessErrorSTM :: Process
-                   -> STM (Maybe SomeException)
-getProcessErrorSTM p@Process{..} = do
+getExceptionSTM :: Process
+                -> STM (Maybe SomeException)
+getExceptionSTM p@Process{..} = do
     r <- isRunningSTM p
     if r
         then return Nothing
-        else do
-        s <- readTMVar status
-        case s of
-            Left e  -> return $ Just e
-            Right _ -> return Nothing
+        else readTMVar status
 
-getProcessError :: MonadIO m
-                => Process
-                -> m (Maybe SomeException)
-getProcessError = atomically . getProcessErrorSTM
+getException :: MonadIO m
+             => Process
+             -> m (Maybe SomeException)
+getException = atomically . getExceptionSTM
 
 atomically :: MonadIO m => STM a -> m a
 atomically = liftIO . STM.atomically

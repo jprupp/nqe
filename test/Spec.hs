@@ -13,8 +13,7 @@ import           Data.Conduit.Text      (decode, encode, utf8)
 import qualified Data.Conduit.Text      as CT
 import           Data.Conduit.TMChan
 import           Data.Dynamic
-import           Data.Monoid
-import           Data.Text              (Text, unpack)
+import           Data.Text              (Text)
 import           Test.Hspec
 
 data Ping = Ping deriving (Eq, Show, Typeable)
@@ -103,7 +102,7 @@ main = hspec $ do
                 sig <- receiveMsg
                 return (sig, thread s)
             case sig of
-                Left (Died _) -> return ()
+                Left (Died _ _) -> return ()
                 _               -> error "Unexpected signal"
         it "dispatch multiple types of message" $ do
             types <- do
