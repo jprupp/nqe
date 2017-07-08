@@ -4,12 +4,10 @@
 module Control.Concurrent.NQE.Network where
 
 import           Control.Concurrent.NQE.Process
-import           Control.Concurrent.STM         (check, isEmptyTQueue)
 import           Control.Exception.Lifted       (Exception, SomeException,
-                                                 catch, finally)
-import           Control.Monad                  (forever, (<=<))
+                                                 catch, throwIO, toException)
 import           Control.Monad.Base             (MonadBase)
-import           Control.Monad.IO.Class         (MonadIO, liftIO)
+import           Control.Monad.IO.Class         (MonadIO)
 import           Control.Monad.Trans.Control    (MonadBaseControl)
 import           Data.Conduit                   (Consumer, Producer,
                                                  awaitForever, yield, ($$))
@@ -30,18 +28,28 @@ fromProducer :: (MonadIO m,
              => Producer m a
              -> Process  -- ^ will receive all messages
              -> m ()
-fromProducer src p = src $$ awaitForever (`send` p)
+fromProducer src p =
+    (src $$ awaitForever (`send` p)) `catch` e
+  where
+    e ex = ProducerDied ex `kill` p
 
 fromConsumer :: (MonadBase IO m,
                  MonadBaseControl IO m,
                  MonadIO m,
                  Typeable a)
              => Consumer a m ()
+             -> Process  -- ^ kill if problem
              -> m ()
-fromConsumer snk = forever (receive >>= yield) $$ snk
-
-flush :: MonadIO m => Process -> m ()
-flush p = atomically $ check =<< mailboxEmptySTM p
+fromConsumer snk p =
+    (dispatcher $$ snk) `catch` e
+  where
+    e ex = ConsumerDied ex `kill` p
+    dispatcher = dispatch
+        [ Case $ \m -> yield m >> dispatcher
+        , Case sig
+        ]
+    sig Stop{}   = return ()
+    sig d@Died{} = ConsumerDied (toException d) `kill` p
 
 withNet :: (MonadIO m,
             MonadBaseControl IO m,
@@ -53,10 +61,9 @@ withNet :: (MonadIO m,
         -> m c
 withNet src snk f = do
     me <- myProcess
-    withProcess (fromProducer src me) $ \prod -> do
-        link prod
-        withProcess (fromConsumer snk) $ \cons -> do
-            link cons
+    withProcess (fromProducer src me) $ \_ ->
+        withProcess (fromConsumer snk me) $ \cons -> do
             ret <- f cons
-            flush cons
+            stop cons
+            waitFor cons
             return ret

@@ -3,24 +3,35 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 import           Control.Concurrent
 import           Control.Concurrent.NQE
-import           Control.Concurrent.STM (readTVar)
-import           Control.Exception      ()
+import           Control.Concurrent.STM
 import           Control.Monad
-import           Control.Monad.Catch    (MonadThrow)
-import           Data.ByteString        (ByteString)
+import           Control.Monad.Catch
+import           Control.Monad.State
+import           Data.ByteString          (ByteString)
 import           Data.Conduit
-import           Data.Conduit.Text      (decode, encode, utf8)
-import qualified Data.Conduit.Text      as CT
+import           Data.Conduit.Text        (decode, encode, utf8)
+import qualified Data.Conduit.Text        as CT
 import           Data.Conduit.TMChan
 import           Data.Dynamic
-import           Data.Text              (Text)
+import           Data.Text                (Text)
 import           Test.Hspec
 
 data Ping = Ping deriving (Eq, Show, Typeable)
 data Pong = Pong deriving (Eq, Show, Typeable)
 
 pong :: IO ()
-pong = forever $ respond $ \Ping -> return Pong
+pong = go `evalStateT` Nothing
+  where
+    go = do
+        dispatch
+            [ Query $ \Ping -> return Pong
+            , Case sig
+            ]
+        st <- get
+        case st of
+            Nothing -> go
+            Just _  -> return ()
+    sig s = put $ Just (s :: Signal)
 
 encoder :: MonadThrow m => Conduit Text m ByteString
 encoder = encode utf8
@@ -34,8 +45,8 @@ conduits :: IO ( Source IO ByteString
                , Sink ByteString IO ()
                )
 conduits = do
-    inChan <- atomically $ newTBMChan 2048
-    outChan <- atomically $ newTBMChan 2048
+    inChan <- atomicallyIO $ newTBMChan 2048
+    outChan <- atomicallyIO $ newTBMChan 2048
     return ( sourceTBMChan inChan
            , sinkTBMChan outChan True
            , sourceTBMChan outChan
@@ -66,8 +77,8 @@ pongClient source sink =
     src = source =$= decoder
     snk = encoder =$= sink
 
-dispatch :: Process -> IO ()
-dispatch p = forever $ handle
+dispatcher :: Process -> IO ()
+dispatcher p = forever $ dispatch
     [ Case $ \(_ :: Int) -> send ("int" :: String) p
     , Case $ \(_ :: String) -> send ("string" :: String) p
     , Default $ const $ send ("default" :: String) p
@@ -92,22 +103,24 @@ main = hspec $ do
         it "setup a link" $ do
             lns <- withProcess pong $ \s -> do
                 link s
-                atomically $ readTVar $ links s
+                lns <- atomically $ readTVar $ links s
+                unlink s
+                return lns
             tid <- myThreadId
             map thread lns `shouldBe` [tid]
         it "linked and stopped" $ do
             (sig, _) <- withProcess pong $ \s -> do
-                link s
+                monitor s
                 stop s
-                sig <- receiveMsg
+                sig <- receive
                 return (sig, thread s)
             case sig of
-                Left (Died _ _) -> return ()
-                _               -> error "Unexpected signal"
+                Died{} -> return ()
+                _      -> error "Unexpected signal"
         it "dispatch multiple types of message" $ do
             types <- do
                 me <- myProcess
-                withProcess (dispatch me) $ \d -> do
+                withProcess (dispatcher me) $ \d -> do
                     send ("This is a string" :: String) d
                     send (42 :: Int) d
                     send (["List", "of", "strings"] :: [String]) d
