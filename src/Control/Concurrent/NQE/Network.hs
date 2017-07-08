@@ -5,7 +5,8 @@ module Control.Concurrent.NQE.Network where
 
 import           Control.Concurrent.NQE.Process
 import           Control.Exception.Lifted       (Exception, SomeException,
-                                                 catch, throwIO, toException)
+                                                 catch, fromException,
+                                                 toException)
 import           Control.Monad.Base             (MonadBase)
 import           Control.Monad.IO.Class         (MonadIO)
 import           Control.Monad.Trans.Control    (MonadBaseControl)
@@ -31,7 +32,10 @@ fromProducer :: (MonadIO m,
 fromProducer src p =
     (src $$ awaitForever (`send` p)) `catch` e
   where
-    e ex = ProducerDied ex `kill` p
+    e ex =
+        case fromException ex of
+            Just DependentActionEnded -> return ()
+            _                         -> ProducerDied ex `kill` p
 
 fromConsumer :: (MonadBase IO m,
                  MonadBaseControl IO m,
