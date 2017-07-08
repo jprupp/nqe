@@ -69,8 +69,8 @@ data Signal = Stop { signalProcess   :: !Process }
 instance Exception Signal
 
 instance Eq Signal where
-    Stop{ signalProcess = p1 } == Stop{ signalProcess = p2 } = p1 == p2
-    Died{ signalProcess = p1 } == Died{ signalProcess = p2 } = p1 == p2
+    Stop { signalProcess = p1 } == Stop { signalProcess = p2 } = p1 == p2
+    Died { signalProcess = p1 } == Died { signalProcess = p2 } = p1 == p2
     _ == _ = False
 
 data ProcessException
@@ -125,7 +125,8 @@ cleanupSTM :: Process
            -> STM ()
 cleanupSTM p@Process{..} ex = do
     putTMVar status ex
-    readTVar monitors >>= mapM_ (sendSTM $ Died p ex)
+    mns <- readTVar monitors
+    forM_ mns $ sendSTM $ Died p ex
     modifyTVar processMap $ Map.delete thread
 
 -- | Run another process while performing an action. Stop it when action
@@ -139,7 +140,7 @@ withProcess f =
   where
     acquire = startProcess f
     release p = do
-        throwTo (thread p) DependentActionEnded
+        DependentActionEnded `kill` p
         waitFor p
 
 mailboxEmptySTM :: Process -> STM Bool
@@ -188,7 +189,7 @@ monitorSTM me remote = do
     add = modifyTVar (monitors remote) $ (me :) . filter (/= me)
     dead = do
         ex <- getExceptionSTM remote
-        sendSTM (Died remote ex) me
+        Died remote ex `sendSTM` me
 
 unlink :: (MonadBase IO m, MonadIO m)
        => Process
