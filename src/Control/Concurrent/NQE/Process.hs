@@ -101,8 +101,7 @@ startProcess action = do
     cleanup pbox e = do
         (p, lns) <- atomicallyIO $ do
             p <- readTMVar pbox
-            cleanupSTM p ex
-            lns <- readTVar $ links p
+            lns <- cleanupSTM p ex
             return (p, lns)
         forM_ lns $ \ln ->
             LinkedProcessDied p ex `kill` ln
@@ -122,12 +121,13 @@ newProcessSTM thread = do
 
 cleanupSTM :: Process
            -> Maybe SomeException
-           -> STM ()
+           -> STM [Process]
 cleanupSTM p@Process{..} ex = do
     putTMVar status ex
     mns <- readTVar monitors
     forM_ mns $ sendSTM $ Died p ex
     modifyTVar processMap $ Map.delete thread
+    readTVar links
 
 -- | Run another process while performing an action. Stop it when action
 -- completes.
