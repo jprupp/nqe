@@ -170,7 +170,7 @@ linkProcesses me remote = do
         if r then add else dead
     case e of
         Nothing -> return ()
-        Just ex -> throwTo (thread me) (LinkedProcessDied remote ex)
+        Just ex -> LinkedProcessDied remote ex `kill` me
   where
     add = do
         modifyTVar (links remote) $ (me :) . filter (/= me)
