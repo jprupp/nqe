@@ -17,7 +17,7 @@ import           Control.Concurrent.STM      (STM, TMVar, TQueue, TVar,
                                               readTQueue, readTVar, unGetTQueue,
                                               writeTQueue)
 import           Control.Exception.Lifted    (Exception, SomeException, bracket,
-                                              throwTo, fromException)
+                                              fromException, throwTo)
 import           Control.Monad               (forM_, join, void, (<=<))
 import           Control.Monad.Base          (MonadBase)
 import           Control.Monad.IO.Class      (MonadIO, liftIO)
@@ -25,6 +25,7 @@ import           Control.Monad.Trans.Control (MonadBaseControl)
 import           Data.Dynamic                (Dynamic, Typeable, fromDynamic,
                                               toDyn)
 import           Data.Function               (on)
+import           Data.List                   (delete, nub)
 import           Data.Map.Strict             (Map)
 import qualified Data.Map.Strict             as Map
 import           Data.Maybe                  (isNothing)
@@ -45,6 +46,7 @@ data Dispatch m
 data Process = Process
     { thread   :: !ThreadId
     , mailbox  :: !Mailbox
+    , children :: !(TVar [Process])
     , links    :: !(TVar [Process])
     , monitors :: !(TVar [Process])
     , status   :: !(TMVar (Maybe SomeException))
@@ -79,7 +81,8 @@ data ProcessException
     deriving (Show, Typeable)
 
 data QuietException
-    = DependentActionEnded
+    = ParentEnded
+    | WrappingActionEnded
     deriving (Show, Typeable)
 
 instance Exception ProcessException
@@ -94,48 +97,66 @@ startProcess :: (MonadBaseControl IO m, MonadIO m)
              => m ()   -- ^ action
              -> m Process
 startProcess action = do
+    me <- myProcess
     pbox <- liftIO newEmptyTMVarIO
-    tid <- forkFinally (go pbox) (cleanup pbox)
+    tid <- forkFinally (go pbox) (cleanup pbox me)
     atomicallyIO $ do
-        p <- newProcessSTM tid
+        p <- newProcessSTM tid (Just me)
         putTMVar pbox p
         return p
   where
     go pbox = atomicallyIO (readTMVar pbox) >> action
-    cleanup pbox e = do
-        (p, lns) <-
+    cleanup pbox me e = do
+        (p, cdn, lns) <-
             atomicallyIO $ do
                 p <- readTMVar pbox
-                lns <- cleanupSTM p e
-                return (p, lns)
+                (cdn, lns) <- cleanupSTM p me e
+                return (p, cdn, lns)
         case e of
             Right () -> return ()
             Left ex ->
                 case fromException ex of
-                    Just DependentActionEnded -> return ()
+                    Just ParentEnded -> return ()
+                    Just _ -> return ()
                     Nothing -> mapM_ (LinkedProcessDied p ex `kill`) lns
+        mapM_ (ParentEnded `kill`) cdn
 
 newProcessSTM :: ThreadId
+              -> Maybe Process   -- ^ parent
               -> STM Process
-newProcessSTM thread = do
-    mailbox   <- newTQueue
-    status    <- newEmptyTMVar
-    links     <- newTVar []
-    monitors  <- newTVar []
-    let process = Process{..}
-    modifyTVar processMap $ Map.insert thread process
-    return process
+newProcessSTM tid parM = do
+    mbox <- newTQueue
+    stat <- newEmptyTMVar
+    lns  <- newTVar []
+    mons <- newTVar []
+    cdn  <- newTVar []
+    let p = Process{ thread = tid
+                   , mailbox = mbox
+                   , status = stat
+                   , links = lns
+                   , monitors = mons
+                   , children = cdn
+                   }
+    modifyTVar processMap $ Map.insert tid p
+    case parM of
+        Just par -> modifyTVar (children par) $ nub . (p :)
+        Nothing  -> return ()
+    return p
 
 cleanupSTM :: Process
+           -> Process  -- ^ parent
            -> Either SomeException ()
-           -> STM [Process]
-cleanupSTM p@Process{..} ex = do
+           -> STM ([Process], [Process])
+cleanupSTM p par ex = do
     let e = either Just (const Nothing) ex
-    putTMVar status e
-    mns <- readTVar monitors
+    modifyTVar (children par) $ delete p . nub
+    putTMVar (status p) e
+    mns <- readTVar (monitors p)
     forM_ mns $ sendSTM $ Died p e
-    modifyTVar processMap $ Map.delete thread
-    readTVar links
+    modifyTVar processMap $ Map.delete (thread p)
+    lns <- readTVar (links p)
+    cdn <- readTVar (children p)
+    return (cdn, lns)
 
 -- | Run another process while performing an action. Stop it when action
 -- completes.
@@ -148,7 +169,7 @@ withProcess f go =
   where
     acquire = startProcess f
     release p = do
-        DependentActionEnded `kill` p
+        WrappingActionEnded `kill` p
         waitFor p
 
 mailboxEmptySTM :: Process -> STM Bool
@@ -183,8 +204,9 @@ linkProcesses me remote = do
         Nothing -> return ()
         Just ex ->
             case fromException ex of
-                Just DependentActionEnded -> return ()
-                Nothing -> LinkedProcessDied remote ex `kill` me
+                Just ParentEnded -> return ()
+                Just _           -> return ()
+                Nothing          -> LinkedProcessDied remote ex `kill` me
   where
     add = do
         modifyTVar (links remote) $ (me :) . filter (/= me)
@@ -327,7 +349,7 @@ threadProcessSTM :: ThreadId -> STM Process
 threadProcessSTM tid = do
     pmap <- readTVar processMap
     case Map.lookup tid pmap of
-        Nothing -> newProcessSTM tid
+        Nothing -> newProcessSTM tid Nothing
         Just p  -> return p
 
 threadProcess :: (MonadBase IO m, MonadIO m)

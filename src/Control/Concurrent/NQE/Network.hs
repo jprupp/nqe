@@ -33,8 +33,9 @@ fromProducer src p = (src $$ awaitForever (`send` p)) `catch` e
   where
     e ex =
         case fromException ex of
-            Just DependentActionEnded -> return ()
-            Nothing                   -> ProducerDied ex `kill` p
+            Just WrappingActionEnded -> return ()
+            Just _                   -> return ()
+            Nothing                  -> ProducerDied ex `kill` p
 
 fromConsumer :: (MonadBase IO m,
                  MonadBaseControl IO m,
@@ -47,8 +48,9 @@ fromConsumer snk p = (dispatcher $$ snk) `catch` e
   where
     e ex =
         case fromException ex of
-            Just DependentActionEnded -> return ()
-            Nothing                   -> ConsumerDied ex `kill` p
+            Just WrappingActionEnded -> return ()
+            Just _                   -> return ()
+            Nothing                  -> ConsumerDied ex `kill` p
     dispatcher = dispatch [Case $ \m -> yield m >> dispatcher, Case sig]
     sig Stop {}   = return ()
     sig d@Died {} = ConsumerDied (toException d) `kill` p
