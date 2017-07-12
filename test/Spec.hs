@@ -101,11 +101,7 @@ main = hspec $ do
             ans <- withProcess pong $ query Ping
             ans `shouldBe` Pong
         it "setup a link" $ do
-            lns <- withProcess pong $ \s -> do
-                link s
-                lns <- atomically $ readTVar $ links s
-                unlink s
-                return lns
+            lns <- withProcess pong $ atomically . readTVar . links
             tid <- myThreadId
             map thread lns `shouldBe` [tid]
         it "linked and stopped" $ do

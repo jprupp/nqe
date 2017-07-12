@@ -17,7 +17,7 @@ import           Control.Concurrent.STM      (STM, TMVar, TQueue, TVar,
                                               readTQueue, readTVar, unGetTQueue,
                                               writeTQueue)
 import           Control.Exception.Lifted    (Exception, SomeException, bracket,
-                                              throwTo)
+                                              throwTo, fromException)
 import           Control.Monad               (forM_, join, void, (<=<))
 import           Control.Monad.Base          (MonadBase)
 import           Control.Monad.IO.Class      (MonadIO, liftIO)
@@ -75,11 +75,15 @@ instance Eq Signal where
 
 data ProcessException
     = CouldNotCastDynamic
-    | DependentActionEnded
-    | LinkedProcessDied !Process !(Maybe SomeException)
+    | LinkedProcessDied !Process !SomeException
+    deriving (Show, Typeable)
+
+data QuietException
+    = DependentActionEnded
     deriving (Show, Typeable)
 
 instance Exception ProcessException
+instance Exception QuietException
 
 {-# NOINLINE processMap #-}
 processMap :: TVar ProcessMap
@@ -99,14 +103,17 @@ startProcess action = do
   where
     go pbox = atomicallyIO (readTMVar pbox) >> action
     cleanup pbox e = do
-        (p, lns) <- atomicallyIO $ do
-            p <- readTMVar pbox
-            lns <- cleanupSTM p ex
-            return (p, lns)
-        forM_ lns $ \ln ->
-            LinkedProcessDied p ex `kill` ln
-      where
-        ex = either Just (const Nothing) e
+        (p, lns) <-
+            atomicallyIO $ do
+                p <- readTMVar pbox
+                lns <- cleanupSTM p e
+                return (p, lns)
+        case e of
+            Right () -> return ()
+            Left ex ->
+                case fromException ex of
+                    Just DependentActionEnded -> return ()
+                    Nothing -> mapM_ (LinkedProcessDied p ex `kill`) lns
 
 newProcessSTM :: ThreadId
               -> STM Process
@@ -120,12 +127,13 @@ newProcessSTM thread = do
     return process
 
 cleanupSTM :: Process
-           -> Maybe SomeException
+           -> Either SomeException ()
            -> STM [Process]
 cleanupSTM p@Process{..} ex = do
-    putTMVar status ex
+    let e = either Just (const Nothing) ex
+    putTMVar status e
     mns <- readTVar monitors
-    forM_ mns $ sendSTM $ Died p ex
+    forM_ mns $ sendSTM $ Died p e
     modifyTVar processMap $ Map.delete thread
     readTVar links
 
@@ -135,8 +143,8 @@ withProcess :: (MonadBaseControl IO m, MonadIO m)
             => m ()              -- ^ action on new process
             -> (Process -> m a)  -- ^ action on current process
             -> m a
-withProcess f =
-    bracket acquire release
+withProcess f go =
+    bracket acquire release $ \p -> link p >> go p
   where
     acquire = startProcess f
     release p = do
@@ -165,19 +173,23 @@ linkProcesses :: (MonadIO m, MonadBase IO m)
               -> Process  -- ^ if this one stops
               -> m ()
 linkProcesses me remote = do
-    e <- atomicallyIO $ do
-        r <- isRunningSTM remote
-        if r then add else dead
-    case e of
+    err <-
+        atomicallyIO $ do
+            r <- isRunningSTM remote
+            if r
+                then add
+                else dead
+    case err of
         Nothing -> return ()
-        Just ex -> LinkedProcessDied remote ex `kill` me
+        Just ex ->
+            case fromException ex of
+                Just DependentActionEnded -> return ()
+                Nothing -> LinkedProcessDied remote ex `kill` me
   where
     add = do
         modifyTVar (links remote) $ (me :) . filter (/= me)
         return Nothing
-    dead = do
-        ex <- getExceptionSTM remote
-        return $ Just ex
+    dead = getExceptionSTM remote
 
 monitorSTM :: Process  -- ^ monitoring
            -> Process  -- ^ monitored

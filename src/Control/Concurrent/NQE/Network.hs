@@ -29,12 +29,12 @@ fromProducer :: (MonadIO m,
              => Producer m a
              -> Process  -- ^ will receive all messages
              -> m ()
-fromProducer src p =
-    (src $$ awaitForever (`send` p)) `catch` e
+fromProducer src p = (src $$ awaitForever (`send` p)) `catch` e
   where
-    e ex = case fromException ex of
-               Just DependentActionEnded -> return ()
-               _                         -> ProducerDied ex `kill` p
+    e ex =
+        case fromException ex of
+            Just DependentActionEnded -> return ()
+            Nothing                   -> ProducerDied ex `kill` p
 
 fromConsumer :: (MonadBase IO m,
                  MonadBaseControl IO m,
@@ -43,18 +43,15 @@ fromConsumer :: (MonadBase IO m,
              => Consumer a m ()
              -> Process  -- ^ kill if problem
              -> m ()
-fromConsumer snk p =
-    (dispatcher $$ snk) `catch` e
+fromConsumer snk p = (dispatcher $$ snk) `catch` e
   where
-    e ex = case fromException ex of
-               Just DependentActionEnded -> return ()
-               _                         -> ConsumerDied ex `kill` p
-    dispatcher = dispatch
-        [ Case $ \m -> yield m >> dispatcher
-        , Case sig
-        ]
-    sig Stop{}   = return ()
-    sig d@Died{} = ConsumerDied (toException d) `kill` p
+    e ex =
+        case fromException ex of
+            Just DependentActionEnded -> return ()
+            Nothing                   -> ConsumerDied ex `kill` p
+    dispatcher = dispatch [Case $ \m -> yield m >> dispatcher, Case sig]
+    sig Stop {}   = return ()
+    sig d@Died {} = ConsumerDied (toException d) `kill` p
 
 withNet :: (MonadIO m,
             MonadBaseControl IO m,
@@ -64,11 +61,11 @@ withNet :: (MonadIO m,
         -> Consumer b m ()
         -> (Remote -> m c)  -- ^ run in this thread
         -> m c
-withNet src snk f = do
-    me <- myProcess
-    withProcess (fromProducer src me) $ \_ ->
-        withProcess (fromConsumer snk me) $ \cons -> do
-            ret <- f cons
-            stop cons
-            waitFor cons
-            return ret
+withNet src snk f =
+    myProcess >>= \me ->
+        withProcess (fromProducer src me) $ \_ ->
+            withProcess (fromConsumer snk me) $ \cons -> do
+                ret <- f cons
+                stop cons
+                waitFor cons
+                return ret
