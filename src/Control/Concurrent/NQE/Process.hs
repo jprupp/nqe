@@ -39,8 +39,8 @@ data Dispatch m
       Query { answerIt :: !(a -> m b) }
     | forall a. Typeable a =>
       Case { getAction :: !(a -> m ()) }
-    | forall a. Typeable a =>
-      Match { getAction :: !(a -> m ()), getMatch  :: !(a -> Bool) }
+    | forall a b. Typeable a =>
+      Match { getAction :: !(b -> m ()), getMatch  :: !(a -> Maybe b) }
     | Default { getDefault :: !(Dynamic -> m ()) }
 
 data Process = Process
@@ -304,9 +304,9 @@ dispatch hs = do
         case x of
             Match f t -> do
                 m <- fromDynamic dyn
-                if t m
-                    then return $ f m
-                    else Nothing
+                case t m of
+                    Just y -> Just $ f y
+                    Nothing -> Nothing
             Case f ->
                 f <$> fromDynamic dyn
             Query f -> do
@@ -319,8 +319,8 @@ dispatch hs = do
                 return $ f dyn
 
 receiveMatch :: (MonadIO m, MonadBase IO m, Typeable msg)
-             => (msg -> Bool)
-             -> m msg
+             => (msg -> Maybe a)
+             -> m a
 receiveMatch f = do
     me <- myProcess
     atomicallyIO $ go me []
@@ -330,12 +330,12 @@ receiveMatch f = do
         case fromDynamic dyn of
             Nothing -> go me (dyn : acc)
             Just x ->
-                if f x
-                then requeue acc me >> return x
-                else go me (dyn : acc)
+                case f x of
+                    Just y -> requeue acc me >> return y
+                    Nothing -> go me (dyn : acc)
 
 receive :: (MonadBase IO m, MonadIO m, Typeable msg) => m msg
-receive = receiveMatch (const True)
+receive = receiveMatch Just
 
 kill :: (MonadIO m, MonadBase IO m, Exception e) => e -> Process -> m ()
 kill e p = throwTo (thread p) e
@@ -365,7 +365,7 @@ query :: (MonadBase IO m, MonadIO m)
 query q remote = do
     me <- myProcess
     send (me, q) remote
-    snd <$> receiveMatch ((== remote) . fst)
+    receiveMatch (\(x, y) -> if x == remote then Just y else Nothing)
 
 respond :: (MonadBase IO m, MonadIO m, Typeable a, Typeable b)
         => (a -> m b)

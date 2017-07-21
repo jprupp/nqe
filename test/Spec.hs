@@ -7,13 +7,13 @@ import           Control.Concurrent.STM
 import           Control.Monad
 import           Control.Monad.Catch
 import           Control.Monad.State
-import           Data.ByteString          (ByteString)
+import           Data.ByteString        (ByteString)
 import           Data.Conduit
-import           Data.Conduit.Text        (decode, encode, utf8)
-import qualified Data.Conduit.Text        as CT
+import           Data.Conduit.Text      (decode, encode, utf8)
+import qualified Data.Conduit.Text      as CT
 import           Data.Conduit.TMChan
 import           Data.Dynamic
-import           Data.Text                (Text)
+import           Data.Text              (Text)
 import           Test.Hspec
 
 data Ping = Ping deriving (Eq, Show, Typeable)
@@ -86,11 +86,11 @@ dispatcher p = forever $ dispatch
 
 ooo :: Process -> IO ()
 ooo p = do
-    msg1 <- receiveMatch (==1)
+    msg1 <- receiveMatch (\x -> if (x :: Int) == 1 then Just 1 else Nothing)
     send (msg1 :: Int) p
-    msg2 <- receiveMatch (==2)
+    msg2 <- receiveMatch (\x -> if (x :: Int) == 2 then Just 2 else Nothing)
     send (msg2 :: Int) p
-    msg3 <- receiveMatch (==3)
+    msg3 <- receiveMatch (\x -> if (x :: Int) == 3 then Just 3 else Nothing)
     send (msg3 :: Int) p
 
 
