@@ -13,9 +13,9 @@ import           Control.Concurrent.STM      (STM, TMVar, TQueue, TVar,
                                               isEmptyTQueue, modifyTVar,
                                               newEmptyTMVar, newEmptyTMVarIO,
                                               newTQueue, newTVar, newTVarIO,
-                                              putTMVar, readTMVar, readTMVar,
-                                              readTQueue, readTVar, unGetTQueue,
-                                              writeTQueue)
+                                              orElse, putTMVar, readTMVar,
+                                              readTMVar, readTQueue, readTVar,
+                                              unGetTQueue, writeTQueue)
 import           Control.Exception.Lifted    (Exception, SomeException, bracket,
                                               fromException, throwTo)
 import           Control.Monad               (forM_, join, void, (<=<))
@@ -305,7 +305,7 @@ dispatch hs = do
             Match f t -> do
                 m <- fromDynamic dyn
                 case t m of
-                    Just y -> Just $ f y
+                    Just y  -> Just $ f y
                     Nothing -> Nothing
             Case f ->
                 f <$> fromDynamic dyn
@@ -318,21 +318,45 @@ dispatch hs = do
             Default f ->
                 return $ f dyn
 
+receiveIfRunningSTM :: Typeable msg
+                    => Process  -- ^ me
+                    -> Process  -- ^ return Nothing if not runnning
+                    -> (msg -> Maybe a)
+                    -> STM (Maybe a)
+receiveIfRunningSTM me p f = recv `orElse` dead
+  where
+    recv = Just <$> receiveMatchSTM me f
+    dead = isRunningSTM p >>= check . not >> return Nothing
+
+receiveIfRunning :: (MonadBase IO m, MonadIO m, Typeable msg)
+                 => Process
+                 -> (msg -> Maybe a)
+                 -> m (Maybe a)
+receiveIfRunning p f = do
+    me <- myProcess
+    atomicallyIO $ receiveIfRunningSTM me p f
+
+receiveMatchSTM :: Typeable msg
+                => Process
+                -> (msg -> Maybe a)
+                -> STM a
+receiveMatchSTM me f = go []
+  where
+    go acc = do
+        dyn <- readTQueue $ mailbox me
+        case fromDynamic dyn of
+            Nothing -> go $ dyn : acc
+            Just x ->
+                case f x of
+                    Nothing -> go $ dyn : acc
+                    Just y  -> requeue acc me >> return y
+
 receiveMatch :: (MonadIO m, MonadBase IO m, Typeable msg)
              => (msg -> Maybe a)
              -> m a
 receiveMatch f = do
     me <- myProcess
-    atomicallyIO $ go me []
-  where
-    go me acc = do
-        dyn <- readTQueue (mailbox me)
-        case fromDynamic dyn of
-            Nothing -> go me (dyn : acc)
-            Just x ->
-                case f x of
-                    Just y -> requeue acc me >> return y
-                    Nothing -> go me (dyn : acc)
+    atomicallyIO $ receiveMatchSTM me f
 
 receive :: (MonadBase IO m, MonadIO m, Typeable msg) => m msg
 receive = receiveMatch Just
@@ -361,11 +385,16 @@ query :: (MonadBase IO m, MonadIO m)
       => (Typeable a, Typeable b)
       => a
       -> Process
-      -> m b
-query q remote = do
+      -> m (Maybe b)
+query q p = do
     me <- myProcess
-    send (me, q) remote
-    receiveMatch (\(x, y) -> if x == remote then Just y else Nothing)
+    send (me, q) p
+    receiveIfRunning p m
+  where
+    m (x, y) =
+        if x == p
+            then Just y
+            else Nothing
 
 respond :: (MonadBase IO m, MonadIO m, Typeable a, Typeable b)
         => (a -> m b)

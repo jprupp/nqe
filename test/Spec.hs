@@ -99,7 +99,7 @@ main = hspec $ do
     describe "two communicating processes" $ do
         it "exchange ping/pong messages" $ do
             ans <- withProcess pong $ query Ping
-            ans `shouldBe` Pong
+            ans `shouldBe` Just Pong
         it "setup a link" $ do
             lns <- withProcess pong $ atomically . readTVar . links
             tid <- myThreadId
