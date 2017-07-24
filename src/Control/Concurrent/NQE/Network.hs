@@ -1,7 +1,10 @@
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE Rank2Types            #-}
-module Control.Concurrent.NQE.Network where
+module Control.Concurrent.NQE.Network
+( NetworkError(..)
+, withNet
+) where
 
 import           Control.Concurrent.NQE.Process
 import           Control.Exception.Lifted       (Exception, SomeException,

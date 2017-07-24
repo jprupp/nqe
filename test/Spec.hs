@@ -7,6 +7,7 @@ import           Control.Concurrent.STM
 import           Control.Monad
 import           Control.Monad.Catch
 import           Control.Monad.State
+import           Control.Monad.STM
 import           Data.ByteString        (ByteString)
 import           Data.Conduit
 import           Data.Conduit.Text      (decode, encode, utf8)
@@ -18,6 +19,9 @@ import           Test.Hspec
 
 data Ping = Ping deriving (Eq, Show, Typeable)
 data Pong = Pong deriving (Eq, Show, Typeable)
+
+atomicallyIO :: MonadIO m => STM a -> m a
+atomicallyIO = liftIO . atomically
 
 pong :: IO ()
 pong = go `evalStateT` Nothing
@@ -100,10 +104,6 @@ main = hspec $ do
         it "exchange ping/pong messages" $ do
             ans <- withProcess pong $ query Ping
             ans `shouldBe` Just Pong
-        it "setup a link" $ do
-            lns <- withProcess pong $ atomically . readTVar . links
-            tid <- myThreadId
-            map thread lns `shouldBe` [tid]
         it "linked and stopped" $ do
             (sig, _) <- withProcess pong $ \s -> do
                 monitor s
