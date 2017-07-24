@@ -3,6 +3,7 @@
 {-# LANGUAGE Rank2Types            #-}
 module Control.Concurrent.NQE.Network
 ( NetworkError(..)
+, Remote
 , withNet
 ) where
 
