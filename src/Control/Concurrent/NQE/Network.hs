@@ -9,8 +9,8 @@ module Control.Concurrent.NQE.Network
 
 import           Control.Concurrent.NQE.Process
 import           Control.Exception.Lifted       (Exception, SomeException,
-                                                 catch, fromException,
-                                                 toException)
+                                                 catch, toException)
+import           Control.Monad                  (unless)
 import           Control.Monad.Base             (MonadBase)
 import           Control.Monad.IO.Class         (MonadIO)
 import           Control.Monad.Trans.Control    (MonadBaseControl)
@@ -35,11 +35,7 @@ fromProducer :: (MonadIO m,
              -> m ()
 fromProducer src p = (src $$ awaitForever (`send` p)) `catch` e
   where
-    e ex =
-        case fromException ex of
-            Just WrappingActionEnded -> return ()
-            Just _                   -> return ()
-            Nothing                  -> ProducerDied ex `kill` p
+    e ex = unless (isQuietException ex) $ ProducerDied ex `kill` p
 
 fromConsumer :: (MonadBase IO m,
                  MonadBaseControl IO m,
@@ -50,11 +46,7 @@ fromConsumer :: (MonadBase IO m,
              -> m ()
 fromConsumer snk p = (dispatcher $$ snk) `catch` e
   where
-    e ex =
-        case fromException ex of
-            Just WrappingActionEnded -> return ()
-            Just _                   -> return ()
-            Nothing                  -> ConsumerDied ex `kill` p
+    e ex = unless (isQuietException ex) $ ConsumerDied ex `kill` p
     dispatcher = dispatch [Case $ \m -> yield m >> dispatcher, Case sig]
     sig Stop {}   = return ()
     sig d@Died {} = ConsumerDied (toException d) `kill` p

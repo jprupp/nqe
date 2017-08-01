@@ -9,6 +9,7 @@ module Control.Concurrent.NQE.Process
 , Signal(..)
 , ProcessException(..)
 , QuietException(..)
+, isQuietException
 , startProcess
 , withProcess
 , dispatch
@@ -126,6 +127,12 @@ instance Exception QuietException
 processMap :: TVar ProcessMap
 processMap = unsafePerformIO $ liftIO $ newTVarIO Map.empty
 
+isQuietException :: SomeException -> Bool
+isQuietException e =
+    case fromException e of
+        Just ParentEnded -> True
+        Just WrappingActionEnded -> True
+        Nothing -> False
 
 -- | Start a new process running passed action.
 startProcess
