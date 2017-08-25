@@ -1,7 +1,9 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts          #-}
+{-# LANGUAGE LambdaCase                #-}
 {-# LANGUAGE MultiParamTypeClasses     #-}
 {-# LANGUAGE RecordWildCards           #-}
+{-# LANGUAGE ScopedTypeVariables       #-}
 {-# OPTIONS_GHC -fno-full-laziness #-}
 module Control.Concurrent.NQE.Process
 ( Process
@@ -14,8 +16,11 @@ module Control.Concurrent.NQE.Process
 , withProcess
 , dispatch
 , receive
+, receiveTimeout
 , receiveMatch
+, receiveMatchTimeout
 , query
+, queryTimeout
 , respond
 , hasException
 , getException
@@ -33,6 +38,7 @@ module Control.Concurrent.NQE.Process
 , monitor
 , deMonitor
 , asyncDelayed
+, race
 , send
 , stop
 , waitFor
@@ -130,9 +136,9 @@ processMap = unsafePerformIO $ liftIO $ newTVarIO Map.empty
 isQuietException :: SomeException -> Bool
 isQuietException e =
     case fromException e of
-        Just ParentEnded -> True
+        Just ParentEnded         -> True
         Just WrappingActionEnded -> True
-        Nothing -> False
+        Nothing                  -> False
 
 -- | Start a new process running passed action.
 startProcess
@@ -310,7 +316,7 @@ deMonitorSTM me other = modifyTVar (monitors other) $ filter (/= me)
 
 asyncDelayed
     :: (MonadIO m, MonadBaseControl IO m)
-    => Int -- ^ seconds
+    => Int -- ^ microseconds
     -> m () -- ^ action to run asynchronously
     -> m () -- ^ returns immediately
 asyncDelayed t f =
@@ -322,7 +328,7 @@ asyncDelayed t f =
                     Left ex  -> ex `kill` me
                     Right () -> return ()
   where
-    delay = threadDelay (t * 1000 * 1000) >> f
+    delay = threadDelay t >> f
 
 sendSTM :: Typeable msg => msg -> Process -> STM ()
 sendSTM msg Process {..} = writeTQueue mailbox $ toDyn msg
@@ -413,10 +419,35 @@ receiveMatch f = do
     me <- myProcess
     atomicallyIO $ receiveMatchSTM me f
 
+receiveMatchTimeout ::
+       ( MonadIO m
+       , MonadBaseControl IO m
+       , MonadBase IO m
+       , Typeable msg
+       , Typeable a
+       )
+    => Int -- ^ microseconds
+    -> (msg -> Maybe a)
+    -> m (Maybe a)
+receiveMatchTimeout t f =
+    threadDelay t `race` receiveMatch f >>= \case
+        Left () -> return Nothing
+        Right x -> return $ Just x
+
+
 receive
     :: (MonadBase IO m, MonadIO m, Typeable msg)
     => m msg
 receive = receiveMatch Just
+
+receiveTimeout ::
+       (MonadBase IO m, MonadBaseControl IO m, MonadIO m, Typeable msg)
+    => Int -- ^ microseconds
+    -> m (Maybe msg)
+receiveTimeout t =
+    threadDelay t `race` receive >>= \case
+        Left () -> return Nothing
+        Right x -> return $ Just x
 
 kill
     :: (MonadIO m, MonadBase IO m, Exception e)
@@ -440,6 +471,31 @@ threadProcess
     => ThreadId -> m Process
 threadProcess = atomicallyIO . threadProcessSTM
 
+race :: forall l r m.
+       ( MonadBase IO m
+       , MonadBaseControl IO m
+       , MonadIO m
+       , Typeable l
+       , Typeable r
+       )
+    => m l -> m r -> m (Either l r)
+race l r = do
+    me <- myProcess
+    withProcess (out me) $ \op ->
+        withProcess (lft op) $ \_ ->
+            withProcess (rgt op) $ \_ ->
+                receiveMatch $ \case
+                    (p, x)
+                        | p == op -> Just x
+                    _ -> Nothing
+  where
+    out p = do
+        me <- myProcess
+        x <- receive
+        (me, x :: Either l r) `send` p
+    lft op = l >>= \x -> (Left x :: Either l r) `send` op
+    rgt op = r >>= \x -> (Right x :: Either l r) `send` op
+
 query
     :: (MonadBase IO m, MonadIO m, Typeable a, Typeable b)
     => a -> Process -> m (Maybe b)
@@ -448,10 +504,25 @@ query q p = do
     send (me, q) p
     receiveIfRunning p m
   where
-    m (x, y) =
-        if x == p
-            then Just y
-            else Nothing
+    m (x, y)
+        | x == p = Just y
+        | otherwise = Nothing
+
+queryTimeout ::
+       ( MonadBase IO m
+       , MonadBaseControl IO m
+       , MonadIO m
+       , Typeable a
+       , Typeable b
+       )
+    => Int -- ^ microseconds
+    -> a
+    -> Process
+    -> m (Maybe b)
+queryTimeout t q p =
+    threadDelay t `race` query q p >>= \case
+        Left () -> return Nothing
+        Right x -> return x
 
 respond
     :: (MonadBase IO m, MonadIO m, Typeable a, Typeable b)

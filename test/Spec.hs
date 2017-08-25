@@ -99,41 +99,51 @@ ooo p = do
 
 
 main :: IO ()
-main = hspec $ do
-    describe "two communicating processes" $ do
-        it "exchange ping/pong messages" $ do
-            ans <- withProcess pong $ query Ping
-            ans `shouldBe` Just Pong
-        it "linked and stopped" $ do
-            (sig, _) <- withProcess pong $ \s -> do
-                monitor s
-                stop s
-                sig <- receive
-                return (sig, thread s)
-            case sig of
-                Died{} -> return ()
-                _      -> error "Unexpected signal"
-        it "dispatch multiple types of message" $ do
-            types <- do
-                me <- myProcess
-                withProcess (dispatcher me) $ \d -> do
-                    send ("This is a string" :: String) d
-                    send (42 :: Int) d
-                    send (["List", "of", "strings"] :: [String]) d
-                    replicateM 3 receive
-            types `shouldBe` (["string", "int", "default"] :: [String])
-        it "process messages out of order if needed" $ do
-            messages <- do
-                me <- myProcess
-                withProcess (ooo me) $ \o -> do
-                    send (2 :: Int) o
-                    send (3 :: Int) o
-                    send (1 :: Int) o
-                    replicateM 3 receive
-            messages `shouldBe` ([1, 2, 3] :: [Int])
-    describe "network process" $ do
-        it "responds to a ping" $ do
-            (source1, sink1, source2, sink2) <- conduits
-            msg <- withProcess (pongServer source1 sink1) $ const $
-                pongClient source2 sink2
-            msg `shouldBe` ("pong" :: Text)
+main =
+    hspec $ do
+        describe "two communicating processes" $ do
+            it "exchange ping/pong messages" $ do
+                ans <- withProcess pong $ query Ping
+                ans `shouldBe` Just Pong
+            it "linked and stopped" $ do
+                (sig, _) <-
+                    withProcess pong $ \s -> do
+                        monitor s
+                        stop s
+                        sig <- receive
+                        return (sig, thread s)
+                case sig of
+                    Died {} -> return ()
+                    _ -> error "Unexpected signal"
+            it "dispatch multiple types of message" $ do
+                types <-
+                    do me <- myProcess
+                       withProcess (dispatcher me) $ \d -> do
+                           send ("This is a string" :: String) d
+                           send (42 :: Int) d
+                           send (["List", "of", "strings"] :: [String]) d
+                           replicateM 3 receive
+                types `shouldBe` (["string", "int", "default"] :: [String])
+            it "process messages out of order if needed" $ do
+                messages <-
+                    do me <- myProcess
+                       withProcess (ooo me) $ \o -> do
+                           send (2 :: Int) o
+                           send (3 :: Int) o
+                           send (1 :: Int) o
+                           replicateM 3 receive
+                messages `shouldBe` ([1, 2, 3] :: [Int])
+        describe "network process" $ do
+            it "responds to a ping" $ do
+                (source1, sink1, source2, sink2) <- conduits
+                msg <-
+                    withProcess (pongServer source1 sink1) $
+                    const $ pongClient source2 sink2
+                msg `shouldBe` ("pong" :: Text)
+        describe "utilities" $ do
+            it "races two processes, right wins" $ do
+                n <- (threadDelay 300000 >> return 0xbad) `race` return 1337
+                (n :: Either Int Int) `shouldBe` Right 1337
+            it "races two processes, left wins" $ do
+                n <- return 1337 `race` (threadDelay 300000 >> return 0xbad)
+                (n :: Either Int Int) `shouldBe` Left 1337
