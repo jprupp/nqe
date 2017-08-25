@@ -429,8 +429,9 @@ receiveMatchTimeout ::
     => Int -- ^ microseconds
     -> (msg -> Maybe a)
     -> m (Maybe a)
-receiveMatchTimeout t f =
-    threadDelay t `race` receiveMatch f >>= \case
+receiveMatchTimeout t f = do
+    me <- myProcess
+    threadDelay t `race` atomicallyIO (receiveMatchSTM me f) >>= \case
         Left () -> return Nothing
         Right x -> return $ Just x
 
@@ -444,8 +445,9 @@ receiveTimeout ::
        (MonadBase IO m, MonadBaseControl IO m, MonadIO m, Typeable msg)
     => Int -- ^ microseconds
     -> m (Maybe msg)
-receiveTimeout t =
-    threadDelay t `race` receive >>= \case
+receiveTimeout t = do
+    me <- myProcess
+    threadDelay t `race` atomicallyIO (receiveMatchSTM me Just) >>= \case
         Left () -> return Nothing
         Right x -> return $ Just x
 
