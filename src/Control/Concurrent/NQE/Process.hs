@@ -13,6 +13,7 @@ import           Control.Monad.IO.Class
 import           Control.Monad.Trans.Control
 
 type Mailbox msg = TQueue msg
+type Reply a = a -> STM ()
 
 -- | Start an actor.
 actor ::
@@ -40,6 +41,12 @@ mailboxEmpty = atomicallyIO . isEmptyTQueue
 
 send :: MonadIO m => msg -> Mailbox msg -> m ()
 send msg = atomicallyIO . (`writeTQueue` msg)
+
+query :: MonadIO m => ((a -> STM ()) -> msg) -> Mailbox msg -> m a
+query f mbox = do
+    box <- atomicallyIO newEmptyTMVar
+    f (putTMVar box) `send` mbox
+    atomicallyIO $ takeTMVar box
 
 requeue :: [msg] -> Mailbox msg -> STM ()
 requeue xs mbox = mapM_ (unGetTQueue mbox) xs
