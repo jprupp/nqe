@@ -48,17 +48,13 @@ withActor action go = do
 mailboxEmpty :: MonadIO m => Mailbox msg -> m Bool
 mailboxEmpty = atomicallyIO . isEmptyTQueue
 
-send :: MonadIO m => msg -> Actor a msg -> m ()
-send msg (a, mbox) =
-    atomicallyIO $
-    pollSTM a >>= \case
-        Just _ -> throwSTM ActorNotRunning
-        Nothing -> mbox `writeTQueue` msg
+send :: MonadIO m => msg -> Mailbox msg -> m ()
+send msg mbox = atomicallyIO $ mbox `writeTQueue` msg
 
 query :: MonadIO m => ((b -> STM ()) -> msg) -> Actor a msg -> m b
-query f act = do
+query f act@(_, mbox) = do
     box <- atomicallyIO newEmptyTMVar
-    f (putTMVar box) `send` act
+    f (putTMVar box) `send` mbox
     atomicallyIO $
         pollSTM (fst act) >>= \case
             Just _ -> throwSTM ActorNotRunning

@@ -81,7 +81,7 @@ main =
             it "exchange ping/pong messages" $ do
                 tv <- atomicallyIO newEmptyTMVar
                 let act = atomicallyIO $ putTMVar tv ()
-                withActor pong $ send $ Ping act
+                withActor pong $ send (Ping act) . snd
                 atomicallyIO $ readTMVar tv
         describe "network process" $ do
             it "responds to a ping" $ do
