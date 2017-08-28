@@ -7,6 +7,7 @@ module Control.Concurrent.NQE.Process where
 import           Control.Concurrent.Async.Lifted.Safe
 import           Control.Concurrent.Lifted
 import           Control.Concurrent.STM
+import           Control.Exception.Lifted
 import           Control.Monad
 import           Control.Monad.Base
 import           Control.Monad.IO.Class
@@ -14,12 +15,20 @@ import           Control.Monad.Trans.Control
 
 type Mailbox msg = TQueue msg
 type Reply a = a -> STM ()
+type Listen a = a -> STM ()
+type Actor a msg = (Async a, Mailbox msg)
+
+data ActorException
+    = ActorNotRunning
+    deriving (Show)
+
+instance Exception ActorException
 
 -- | Start an actor.
 actor ::
        (MonadBaseControl IO m, MonadIO m, Forall (Pure m))
     => (Mailbox msg -> m a) -- ^ actor action
-    -> m (Async a, Mailbox msg)
+    -> m (Actor a msg)
 actor action = do
     mbox <- atomicallyIO newTQueue
     a <- async $ action mbox
@@ -30,7 +39,7 @@ actor action = do
 withActor ::
        (MonadBaseControl IO m, MonadIO m, Forall (Pure m))
     => (Mailbox msg -> m a) -- ^ action on actor
-    -> ((Async a, Mailbox msg) -> m b) -- ^ action on current thread
+    -> (Actor a msg -> m b) -- ^ action on current thread
     -> m b
 withActor action go = do
     mbox <- atomicallyIO newTQueue
@@ -39,14 +48,21 @@ withActor action go = do
 mailboxEmpty :: MonadIO m => Mailbox msg -> m Bool
 mailboxEmpty = atomicallyIO . isEmptyTQueue
 
-send :: MonadIO m => msg -> Mailbox msg -> m ()
-send msg = atomicallyIO . (`writeTQueue` msg)
+send :: MonadIO m => msg -> Actor a msg -> m ()
+send msg (a, mbox) =
+    atomicallyIO $
+    pollSTM a >>= \case
+        Just _ -> throwSTM ActorNotRunning
+        Nothing -> mbox `writeTQueue` msg
 
-query :: MonadIO m => ((a -> STM ()) -> msg) -> Mailbox msg -> m a
-query f mbox = do
+query :: MonadIO m => ((b -> STM ()) -> msg) -> Actor a msg -> m b
+query f act = do
     box <- atomicallyIO newEmptyTMVar
-    f (putTMVar box) `send` mbox
-    atomicallyIO $ takeTMVar box
+    f (putTMVar box) `send` act
+    atomicallyIO $
+        pollSTM (fst act) >>= \case
+            Just _ -> throwSTM ActorNotRunning
+            Nothing -> takeTMVar box
 
 requeue :: [msg] -> Mailbox msg -> STM ()
 requeue xs mbox = mapM_ (unGetTQueue mbox) xs
