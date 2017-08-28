@@ -4,6 +4,7 @@
 {-# LANGUAGE MultiParamTypeClasses     #-}
 {-# LANGUAGE ScopedTypeVariables       #-}
 module Control.Concurrent.NQE.Process where
+
 import           Control.Concurrent.Async.Lifted.Safe
 import           Control.Concurrent.Lifted
 import           Control.Concurrent.STM
@@ -12,6 +13,7 @@ import           Control.Monad
 import           Control.Monad.Base
 import           Control.Monad.IO.Class
 import           Control.Monad.Trans.Control
+import           Data.Maybe
 
 type Mailbox msg = TQueue msg
 type Reply a = a -> STM ()
@@ -51,14 +53,19 @@ mailboxEmpty = atomicallyIO . isEmptyTQueue
 send :: MonadIO m => msg -> Mailbox msg -> m ()
 send msg mbox = atomicallyIO $ mbox `writeTQueue` msg
 
-query :: MonadIO m => ((b -> STM ()) -> msg) -> Actor a msg -> m b
-query f act@(_, mbox) = do
+query :: MonadIO m => (Reply b -> msg) -> Actor a msg -> m b
+query f act = fromMaybe e <$> queryMaybe f act
+  where
+    e = throw ActorNotRunning
+
+queryMaybe :: MonadIO m => (Reply b -> msg) -> Actor a msg -> m (Maybe b)
+queryMaybe f act = do
     box <- atomicallyIO newEmptyTMVar
-    f (putTMVar box) `send` mbox
+    f (putTMVar box) `send` snd act
     atomicallyIO $
         pollSTM (fst act) >>= \case
-            Just _ -> throwSTM ActorNotRunning
-            Nothing -> takeTMVar box
+            Just _ -> return Nothing
+            Nothing -> Just <$> takeTMVar box
 
 requeue :: [msg] -> Mailbox msg -> STM ()
 requeue xs mbox = mapM_ (unGetTQueue mbox) xs
