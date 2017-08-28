@@ -77,8 +77,8 @@ receive :: (MonadBase IO m, MonadIO m) => Mailbox msg -> m msg
 receive = dispatch [(Just, return)]
 
 receiveMatch ::
-       (MonadBase IO m, MonadIO m) => (msg -> Maybe a) -> Mailbox msg -> m a
-receiveMatch f = dispatch [(f, return)]
+       (MonadBase IO m, MonadIO m) => Mailbox msg -> (msg -> Maybe a) -> m a
+receiveMatch mbox f = dispatch [(f, return)] mbox
 
 atomicallyIO :: MonadIO m => STM a -> m a
 atomicallyIO = liftIO . atomically
