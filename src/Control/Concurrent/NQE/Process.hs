@@ -22,7 +22,7 @@ type Listen a = a -> STM ()
 data Actor a msg = Actor
     { promise :: !(Async a)
     , mailbox :: !(Mailbox msg)
-    }
+    } deriving (Eq)
 
 data ActorException
     = ActorNotRunning
