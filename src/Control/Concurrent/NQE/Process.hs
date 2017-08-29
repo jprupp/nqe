@@ -54,6 +54,7 @@ withActor action go = do
     mbox <- liftIO newTQueueIO
     abox <- liftIO newEmptyTMVarIO
     withAsync (atomicallyIO (takeTMVar abox) >>= action) $ \a -> do
+        link a
         let act = Actor {promise = a, mailbox = mbox}
         atomicallyIO $ putTMVar abox act
         go act
