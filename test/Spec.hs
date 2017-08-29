@@ -17,14 +17,14 @@ import           Data.Conduit.TMChan
 import           Data.Text                            (Text)
 import           Test.Hspec
 
-newtype Ping m =
-    Ping (m ())
+data Pong = Pong deriving (Eq, Show)
+newtype Ping = Ping (Pong -> STM ())
 
-pong :: Mailbox (Ping IO) -> IO ()
-pong mbox =
+pong :: Actor () Ping -> IO ()
+pong act =
     forever $ do
-        Ping action <- receive mbox
-        action
+        Ping reply <- receive (mailbox act)
+        atomicallyIO (reply Pong)
 
 encoder :: MonadThrow m => Conduit Text m ByteString
 encoder = encode utf8
@@ -48,11 +48,13 @@ conduits = do
 
 pongServer :: Source IO ByteString
            -> Sink ByteString IO ()
-           -> (Async () -> IO a)
+           -> (Actor () Text -> IO a)
            -> IO a
-pongServer source sink go = withActor action $ go . fst
+pongServer source sink go = withActor action go
   where
-    action mbox = withSource src mbox $ const $ processor mbox $$ snk
+    action act =
+        let mbox = mailbox act
+        in withSource src mbox $ const $ processor mbox $$ snk
     src = source =$= decoder
     snk = encoder =$= sink
     processor mbox =
@@ -66,8 +68,10 @@ pongClient :: Source IO ByteString
            -> IO Text
 pongClient source sink = withActor action go
   where
-    action mbox = withSource src mbox $ const $ processor mbox
-    go (a, _) = wait a
+    action act =
+        let mbox = mailbox act
+        in withSource src mbox $ const $ processor mbox
+    go = wait . promise
     src = source =$= decoder
     snk = encoder =$= sink
     processor mbox = do
@@ -79,15 +83,13 @@ main =
     hspec $ do
         describe "two communicating processes" $ do
             it "exchange ping/pong messages" $ do
-                tv <- atomicallyIO newEmptyTMVar
-                let act = atomicallyIO $ putTMVar tv ()
-                withActor pong $ send (Ping act) . snd
-                atomicallyIO $ readTMVar tv
+                g <- withActor pong $ query Ping
+                g `shouldBe` Pong
         describe "network process" $ do
             it "responds to a ping" $ do
                 (source1, sink1, source2, sink2) <- conduits
                 msg <-
-                    pongServer source1 sink1 $ \_ -> pongClient source2 sink2
+                    pongServer source1 sink1 $ const $ pongClient source2 sink2
                 msg `shouldBe` "pong"
         describe "utilities" $ do
             it "timeout action fails" $ do

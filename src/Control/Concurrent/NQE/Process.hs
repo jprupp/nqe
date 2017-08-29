@@ -18,7 +18,11 @@ import           Data.Maybe
 type Mailbox msg = TQueue msg
 type Reply a = a -> STM ()
 type Listen a = a -> STM ()
-type Actor a msg = (Async a, Mailbox msg)
+
+data Actor a msg = Actor
+    { promise :: !(Async a)
+    , mailbox :: !(Mailbox msg)
+    }
 
 data ActorException
     = ActorNotRunning
@@ -29,23 +33,30 @@ instance Exception ActorException
 -- | Start an actor.
 actor ::
        (MonadBaseControl IO m, MonadIO m, Forall (Pure m))
-    => (Mailbox msg -> m a) -- ^ actor action
+    => (Actor a msg -> m a) -- ^ actor action
     -> m (Actor a msg)
 actor action = do
-    mbox <- atomicallyIO newTQueue
-    a <- async $ action mbox
-    return (a, mbox)
+    mbox <- liftIO newTQueueIO
+    abox <- liftIO newEmptyTMVarIO
+    a <- async $ atomicallyIO (takeTMVar abox) >>= action
+    let act = Actor {promise = a, mailbox = mbox}
+    atomicallyIO $ putTMVar abox act
+    return act
 
 -- | Run another actor while performing an action in this one. Stop it when
 -- action completes.
 withActor ::
        (MonadBaseControl IO m, MonadIO m, Forall (Pure m))
-    => (Mailbox msg -> m a) -- ^ action on actor
+    => (Actor a msg -> m a) -- ^ action on actor
     -> (Actor a msg -> m b) -- ^ action on current thread
     -> m b
 withActor action go = do
-    mbox <- atomicallyIO newTQueue
-    withAsync (action mbox) (\a -> go (a, mbox))
+    mbox <- liftIO newTQueueIO
+    abox <- liftIO newEmptyTMVarIO
+    withAsync (atomicallyIO (takeTMVar abox) >>= action) $ \a -> do
+        let act = Actor {promise = a, mailbox = mbox}
+        atomicallyIO $ putTMVar abox act
+        go act
 
 mailboxEmpty :: MonadIO m => Mailbox msg -> m Bool
 mailboxEmpty = atomicallyIO . isEmptyTQueue
@@ -61,9 +72,9 @@ query f act = fromMaybe e <$> queryMaybe f act
 queryMaybe :: MonadIO m => (Reply b -> msg) -> Actor a msg -> m (Maybe b)
 queryMaybe f act = do
     box <- atomicallyIO newEmptyTMVar
-    f (putTMVar box) `send` snd act
+    f (putTMVar box) `send` mailbox act
     atomicallyIO $
-        pollSTM (fst act) >>= \case
+        pollSTM (promise act) >>= \case
             Just _ -> return Nothing
             Nothing -> Just <$> takeTMVar box
 
