@@ -20,10 +20,10 @@ import           Test.Hspec
 data Pong = Pong deriving (Eq, Show)
 newtype Ping = Ping (Pong -> STM ())
 
-pong :: Actor () Ping -> IO ()
-pong act =
+pong :: Mailbox Ping -> IO ()
+pong mbox =
     forever $ do
-        Ping reply <- receive (mailbox act)
+        Ping reply <- receive mbox
         atomicallyIO (reply Pong)
 
 encoder :: MonadThrow m => Conduit Text m ByteString
@@ -32,11 +32,11 @@ encoder = encode utf8
 decoder :: MonadThrow m => Conduit ByteString m Text
 decoder = decode utf8 =$= CT.lines
 
-conduits :: IO ( Source IO ByteString
-               , Sink ByteString IO ()
-               , Source IO ByteString
-               , Sink ByteString IO ()
-               )
+conduits ::
+       IO ( Source IO ByteString
+          , Sink ByteString IO ()
+          , Source IO ByteString
+          , Sink ByteString IO ())
 conduits = do
     inChan <- atomicallyIO $ newTBMChan 2048
     outChan <- atomicallyIO $ newTBMChan 2048
@@ -46,15 +46,14 @@ conduits = do
            , sinkTBMChan inChan True
            )
 
-pongServer :: Source IO ByteString
-           -> Sink ByteString IO ()
-           -> (Actor () Text -> IO a)
-           -> IO a
+pongServer ::
+       Source IO ByteString
+    -> Sink ByteString IO ()
+    -> (Actor () Text -> IO a)
+    -> IO a
 pongServer source sink go = withActor action go
   where
-    action act =
-        let mbox = mailbox act
-        in withSource src mbox $ const $ processor mbox $$ snk
+    action mbox = withSource src mbox $ const $ processor mbox $$ snk
     src = source =$= decoder
     snk = encoder =$= sink
     processor mbox =
@@ -68,10 +67,9 @@ pongClient :: Source IO ByteString
            -> IO Text
 pongClient source sink = withActor action go
   where
-    action act =
-        let mbox = mailbox act
-        in withSource src mbox $ const $ processor mbox
-    go = wait . promise
+    action mbox =
+        withSource src mbox $ const $ processor mbox
+    go = wait . fst
     src = source =$= decoder
     snk = encoder =$= sink
     processor mbox = do
@@ -83,7 +81,7 @@ main =
     hspec $ do
         describe "two communicating processes" $ do
             it "exchange ping/pong messages" $ do
-                g <- withActor pong $ query Ping
+                g <- withActor pong $ query Ping . snd
                 g `shouldBe` Pong
         describe "network process" $ do
             it "responds to a ping" $ do
