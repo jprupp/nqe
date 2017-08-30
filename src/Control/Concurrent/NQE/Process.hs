@@ -37,9 +37,7 @@ withActor ::
     -> m b
 withActor action go = do
     mbox <- liftIO newTQueueIO
-    withAsync (action mbox) $ \a -> do
-        link a
-        go (a, mbox)
+    withAsync (action mbox) $ \a -> go (a, mbox)
 
 mailboxEmpty :: MonadIO m => Mailbox msg -> m Bool
 mailboxEmpty = atomicallyIO . isEmptyTQueue
