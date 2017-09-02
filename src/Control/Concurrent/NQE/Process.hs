@@ -45,6 +45,9 @@ mailboxEmpty = atomicallyIO . isEmptyTQueue
 send :: MonadIO m => msg -> Mailbox msg -> m ()
 send msg mbox = atomicallyIO $ mbox `writeTQueue` msg
 
+sendSTM :: msg -> Mailbox msg -> STM ()
+sendSTM msg mbox = mbox `writeTQueue` msg
+
 query :: MonadIO m => (Reply b -> msg) -> Mailbox msg -> m b
 query f mbox = do
     box <- atomicallyIO newEmptyTMVar
@@ -54,7 +57,7 @@ query f mbox = do
 requeue :: [msg] -> Mailbox msg -> STM ()
 requeue xs mbox = mapM_ (unGetTQueue mbox) xs
 
-extractMsg :: [(msg -> Maybe a, a -> m b)] -> Mailbox msg -> STM (m b)
+extractMsg :: [(msg -> Maybe a, a -> b)] -> Mailbox msg -> STM b
 extractMsg hs mbox = do
     msg <- readTQueue mbox
     go [] msg hs
@@ -76,12 +79,21 @@ dispatch ::
     -> m b
 dispatch hs = join . atomicallyIO . extractMsg hs
 
+dispatchSTM :: [msg -> Maybe a] -> Mailbox msg -> STM a
+dispatchSTM = extractMsg . map (\x -> (x, id))
+
 receive :: (MonadBase IO m, MonadIO m) => Mailbox msg -> m msg
 receive = dispatch [(Just, return)]
+
+receiveSTM :: Mailbox msg -> STM msg
+receiveSTM = dispatchSTM [Just]
 
 receiveMatch ::
        (MonadBase IO m, MonadIO m) => Mailbox msg -> (msg -> Maybe a) -> m a
 receiveMatch mbox f = dispatch [(f, return)] mbox
+
+receiveMatchSTM :: Mailbox msg -> (msg -> Maybe a) -> STM a
+receiveMatchSTM mbox f = dispatchSTM [f] mbox
 
 atomicallyIO :: MonadIO m => STM a -> m a
 atomicallyIO = liftIO . atomically
