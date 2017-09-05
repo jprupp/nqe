@@ -20,7 +20,7 @@ import           Test.Hspec
 data Pong = Pong deriving (Eq, Show)
 newtype Ping = Ping (Pong -> STM ())
 
-pong :: Mailbox Ping -> IO ()
+pong :: Mailbox TQueue Ping -> IO ()
 pong mbox =
     forever $ do
         Ping reply <- receive mbox
@@ -49,9 +49,11 @@ conduits = do
 pongServer ::
        Source IO ByteString
     -> Sink ByteString IO ()
-    -> (Actor () Text -> IO a)
+    -> (Actor () -> IO a)
     -> IO a
-pongServer source sink go = withActor action go
+pongServer source sink go = do
+    mbox <- newTQueueIO
+    withActor (action mbox) go
   where
     action mbox = withSource src mbox $ const $ processor mbox $$ snk
     src = source =$= decoder
@@ -65,11 +67,13 @@ pongServer source sink go = withActor action go
 pongClient :: Source IO ByteString
            -> Sink ByteString IO ()
            -> IO Text
-pongClient source sink = withActor action go
+pongClient source sink = do
+    mbox <- newTQueueIO
+    withActor (action mbox) go
   where
     action mbox =
         withSource src mbox $ const $ processor mbox
-    go = wait . fst
+    go = wait
     src = source =$= decoder
     snk = encoder =$= sink
     processor mbox = do
@@ -81,7 +85,8 @@ main =
     hspec $ do
         describe "two communicating processes" $ do
             it "exchange ping/pong messages" $ do
-                g <- withActor pong $ query Ping . snd
+                mbox <- newTQueueIO
+                g <- withActor (pong mbox) $ const $ query Ping mbox
                 g `shouldBe` Pong
         describe "network process" $ do
             it "responds to a ping" $ do
