@@ -13,24 +13,23 @@ import           Control.Monad.Base
 import           Control.Monad.IO.Class
 import           Control.Monad.Trans.Control
 
-type Mailbox mbox msg = mbox msg
 type Reply a = a -> STM ()
 type Listen a = a -> STM ()
 type Actor a = Async a
 
-class ActorMailbox mbox where
-    mailboxEmptySTM :: Mailbox mbox msg -> STM Bool
-    sendSTM :: msg -> Mailbox mbox msg -> STM ()
-    receiveSTM :: Mailbox mbox msg -> STM msg
-    requeueMsg :: msg -> Mailbox mbox msg -> STM ()
+class Mailbox mbox where
+    mailboxEmptySTM :: mbox msg -> STM Bool
+    sendSTM :: msg -> mbox msg -> STM ()
+    receiveSTM :: mbox msg -> STM msg
+    requeueMsg :: msg -> mbox msg -> STM ()
 
-instance ActorMailbox TQueue where
+instance Mailbox TQueue where
     mailboxEmptySTM = isEmptyTQueue
     sendSTM msg = (`writeTQueue` msg)
     receiveSTM = readTQueue
     requeueMsg msg = (`unGetTQueue` msg)
 
-instance ActorMailbox TBQueue where
+instance Mailbox TBQueue where
     mailboxEmptySTM = isEmptyTBQueue
     sendSTM msg = (`writeTBQueue` msg)
     receiveSTM = readTBQueue
@@ -52,19 +51,19 @@ withActor ::
     -> m b
 withActor = withAsync
 
-mailboxEmpty :: (ActorMailbox mbox, MonadIO m) => Mailbox mbox msg -> m Bool
+mailboxEmpty :: (Mailbox mbox, MonadIO m) => mbox msg -> m Bool
 mailboxEmpty = atomicallyIO . mailboxEmptySTM
 
-send :: (ActorMailbox mbox, MonadIO m) => msg -> Mailbox mbox msg -> m ()
+send :: (Mailbox mbox, MonadIO m) => msg -> mbox msg -> m ()
 send msg = atomicallyIO . sendSTM msg
 
-requeue :: (ActorMailbox mbox) => [msg] -> Mailbox mbox msg -> STM ()
+requeue :: (Mailbox mbox) => [msg] -> mbox msg -> STM ()
 requeue xs mbox = mapM_ (`requeueMsg` mbox) xs
 
 extractMsg ::
-       (ActorMailbox mbox)
+       (Mailbox mbox)
     => [(msg -> Maybe a, a -> b)]
-    -> Mailbox mbox msg
+    -> mbox msg
     -> STM b
 extractMsg hs mbox = do
     msg <- receiveSTM mbox
@@ -81,9 +80,9 @@ extractMsg hs mbox = do
             Nothing -> go acc msg fs
 
 query ::
-       (ActorMailbox mbox, MonadIO m)
+       (Mailbox mbox, MonadIO m)
     => (Reply b -> msg)
-    -> Mailbox mbox msg
+    -> mbox msg
     -> m b
 query f mbox = do
     box <- atomicallyIO newEmptyTMVar
@@ -91,30 +90,30 @@ query f mbox = do
     atomicallyIO $ takeTMVar box
 
 dispatch ::
-       (ActorMailbox mbox, MonadBase IO m, MonadIO m)
+       (Mailbox mbox, MonadBase IO m, MonadIO m)
     => [(msg -> Maybe a, a -> m b)] -- ^ action to dispatch
-    -> Mailbox mbox msg -- ^ mailbox to read from
+    -> mbox msg -- ^ mailbox to read from
     -> m b
 dispatch hs = join . atomicallyIO . extractMsg hs
 
-dispatchSTM :: (ActorMailbox mbox) => [msg -> Maybe a] -> Mailbox mbox msg -> STM a
+dispatchSTM :: (Mailbox mbox) => [msg -> Maybe a] -> mbox msg -> STM a
 dispatchSTM = extractMsg . map (\x -> (x, id))
 
 receive ::
-       (ActorMailbox mbox, MonadBase IO m, MonadIO m)
-    => Mailbox mbox msg
+       (Mailbox mbox, MonadBase IO m, MonadIO m)
+    => mbox msg
     -> m msg
 receive = dispatch [(Just, return)]
 
 receiveMatch ::
-       (ActorMailbox mbox, MonadBase IO m, MonadIO m)
-    => Mailbox mbox msg
+       (Mailbox mbox, MonadBase IO m, MonadIO m)
+    => mbox msg
     -> (msg -> Maybe a)
     -> m a
 receiveMatch mbox f = dispatch [(f, return)] mbox
 
 receiveMatchSTM ::
-       (ActorMailbox mbox) => Mailbox mbox msg -> (msg -> Maybe a) -> STM a
+       (Mailbox mbox) => mbox msg -> (msg -> Maybe a) -> STM a
 receiveMatchSTM mbox f = dispatchSTM [f] mbox
 
 atomicallyIO :: MonadIO m => STM a -> m a

@@ -9,16 +9,16 @@ import           Control.Monad.Trans.Control
 import           Data.Conduit
 
 fromSource ::
-       (ActorMailbox mbox, MonadIO m, MonadBaseControl IO m)
+       (Mailbox mbox, MonadIO m, MonadBaseControl IO m)
     => Source m msg
-    -> Mailbox mbox msg -- ^ will receive all messages
+    -> mbox msg -- ^ will receive all messages
     -> m ()
 fromSource src mbox = src $$ awaitForever (`send` mbox)
 
 withSource ::
-       (ActorMailbox mbox, MonadIO m, MonadBaseControl IO m, Forall (Pure m))
+       (Mailbox mbox, MonadIO m, MonadBaseControl IO m, Forall (Pure m))
     => Source m msg
-    -> Mailbox mbox msg
+    -> mbox msg
     -> (Async () -> m a)
     -> m a
 withSource src mbox = withAsync (fromSource src mbox)

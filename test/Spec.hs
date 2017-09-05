@@ -3,10 +3,8 @@
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-import           Control.Concurrent.Async.Lifted.Safe
 import           Control.Concurrent.Lifted            hiding (yield)
 import           Control.Concurrent.NQE
-import           Control.Concurrent.STM
 import           Control.Monad
 import           Control.Monad.Catch
 import           Data.ByteString                      (ByteString)
@@ -20,7 +18,7 @@ import           Test.Hspec
 data Pong = Pong deriving (Eq, Show)
 newtype Ping = Ping (Pong -> STM ())
 
-pong :: Mailbox TQueue Ping -> IO ()
+pong :: TQueue Ping -> IO ()
 pong mbox =
     forever $ do
         Ping reply <- receive mbox
