@@ -1,13 +1,15 @@
 name:                nqe
 version:             0.1.0.0
 synopsis:            Concurrency library in the style of Erlang/OTP
--- description:
+description:
+    Follow the example of Erlang developing a minimalistic actor library with a
+    distinct Haskell flavour. It does not implement Erlang/OTP-style processes
+    exactly, but it is merely inspired by their philosophy.
 homepage:            https://github.com/xenog/nqe#readme
-license:             BSD3
-license-file:        LICENSE
+license:             PublicDomain
+license-file:        UNLICENSE
 author:              Jean-Pierre Rupp
 maintainer:          xenog@protonmail.com
-copyright:           (c) 2017 Jean-Pierre Rupp
 category:            Control
 build-type:          Simple
 extra-source-files:  README.md
