@@ -1,18 +1,17 @@
-{-# LANGUAGE FlexibleContexts    #-}
-{-# LANGUAGE GADTs               #-}
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-import           Control.Concurrent.Lifted            hiding (yield)
+import           Control.Concurrent     hiding (yield)
 import           Control.Concurrent.NQE
 import           Control.Monad
 import           Control.Monad.Catch
-import           Data.ByteString                      (ByteString)
+import           Control.Monad.IO.Class
+import           Data.ByteString        (ByteString)
 import           Data.Conduit
-import           Data.Conduit.Text                    (decode, encode, utf8)
-import qualified Data.Conduit.Text                    as CT
+import           Data.Conduit.Text      (decode, encode, utf8)
+import qualified Data.Conduit.Text      as CT
 import           Data.Conduit.TMChan
-import           Data.Text                            (Text)
+import           Data.Text              (Text)
 import           Test.Hspec
 
 data Pong = Pong deriving (Eq, Show)
@@ -22,7 +21,7 @@ pong :: TQueue Ping -> IO ()
 pong mbox =
     forever $ do
         Ping reply <- receive mbox
-        atomicallyIO (reply Pong)
+        atomically (reply Pong)
 
 encoder :: MonadThrow m => Conduit Text m ByteString
 encoder = encode utf8
@@ -36,8 +35,8 @@ conduits ::
           , Source IO ByteString
           , Sink ByteString IO ())
 conduits = do
-    inChan <- atomicallyIO $ newTBMChan 2048
-    outChan <- atomicallyIO $ newTBMChan 2048
+    inChan <- newTBMChanIO 2048
+    outChan <- newTBMChanIO 2048
     return ( sourceTBMChan inChan
            , sinkTBMChan outChan True
            , sourceTBMChan outChan
@@ -53,12 +52,12 @@ pongServer source sink go = do
     mbox <- newTQueueIO
     withActor (action mbox) go
   where
-    action mbox = withSource src mbox $ const $ processor mbox $$ snk
+    action mbox = withSource src mbox . const $ processor mbox $$ snk
     src = source =$= decoder
     snk = encoder =$= sink
     processor mbox =
         forever $
-        receive mbox >>= \case
+        liftIO (receive mbox) >>= \case
             ("ping" :: Text) -> yield ("pong\n" :: Text)
             _ -> return ()
 

@@ -1,17 +1,10 @@
-{-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE FlexibleContexts          #-}
-{-# LANGUAGE LambdaCase                #-}
-{-# LANGUAGE MultiParamTypeClasses     #-}
-{-# LANGUAGE ScopedTypeVariables       #-}
+{-# LANGUAGE LambdaCase #-}
 module Control.Concurrent.NQE.Process where
 
-import           Control.Concurrent.Async.Lifted.Safe
-import           Control.Concurrent.Lifted
+import           Control.Concurrent.Async
+import           Control.Concurrent
 import           Control.Concurrent.STM
 import           Control.Monad
-import           Control.Monad.Base
-import           Control.Monad.IO.Class
-import           Control.Monad.Trans.Control
 
 type Reply a = a -> STM ()
 type Listen a = a -> STM ()
@@ -37,25 +30,23 @@ instance Mailbox TBQueue where
 
 -- | Start an actor.
 actor ::
-       (MonadBaseControl IO m, MonadIO m, Forall (Pure m))
-    => m a -- ^ actor action
-    -> m (Async a)
+       IO a -- ^ actor action
+    -> IO (Async a)
 actor = async
 
 -- | Run another actor while performing an action on this thread. Stop it when
 -- action completes. Remote actor is linked to current thread.
 withActor ::
-       (MonadBaseControl IO m, MonadIO m, Forall (Pure m))
-    => m a -- ^ action on actor
-    -> (Actor a -> m b) -- ^ action on current thread
-    -> m b
+       IO a -- ^ action on actor
+    -> (Actor a -> IO b) -- ^ action on current thread
+    -> IO b
 withActor = withAsync
 
-mailboxEmpty :: (Mailbox mbox, MonadIO m) => mbox msg -> m Bool
-mailboxEmpty = atomicallyIO . mailboxEmptySTM
+mailboxEmpty :: (Mailbox mbox) => mbox msg -> IO Bool
+mailboxEmpty = atomically . mailboxEmptySTM
 
-send :: (Mailbox mbox, MonadIO m) => msg -> mbox msg -> m ()
-send msg = atomicallyIO . sendSTM msg
+send :: (Mailbox mbox) => msg -> mbox msg -> IO ()
+send msg = atomically . sendSTM msg
 
 requeue :: (Mailbox mbox) => [msg] -> mbox msg -> STM ()
 requeue xs mbox = mapM_ (`requeueMsg` mbox) xs
@@ -80,46 +71,39 @@ extractMsg hs mbox = do
             Nothing -> go acc msg fs
 
 query ::
-       (Mailbox mbox, MonadIO m)
+       (Mailbox mbox)
     => (Reply b -> msg)
     -> mbox msg
-    -> m b
+    -> IO b
 query f mbox = do
-    box <- atomicallyIO newEmptyTMVar
+    box <- atomically newEmptyTMVar
     f (putTMVar box) `send` mbox
-    atomicallyIO $ takeTMVar box
+    atomically $ takeTMVar box
 
 dispatch ::
-       (Mailbox mbox, MonadBase IO m, MonadIO m)
-    => [(msg -> Maybe a, a -> m b)] -- ^ action to dispatch
+       (Mailbox mbox)
+    => [(msg -> Maybe a, a -> IO b)] -- ^ action to dispatch
     -> mbox msg -- ^ mailbox to read from
-    -> m b
-dispatch hs = join . atomicallyIO . extractMsg hs
+    -> IO b
+dispatch hs = join . atomically . extractMsg hs
 
 dispatchSTM :: (Mailbox mbox) => [msg -> Maybe a] -> mbox msg -> STM a
 dispatchSTM = extractMsg . map (\x -> (x, id))
 
 receive ::
-       (Mailbox mbox, MonadBase IO m, MonadIO m)
+       (Mailbox mbox)
     => mbox msg
-    -> m msg
+    -> IO msg
 receive = dispatch [(Just, return)]
 
-receiveMatch ::
-       (Mailbox mbox, MonadBase IO m, MonadIO m)
-    => mbox msg
-    -> (msg -> Maybe a)
-    -> m a
+receiveMatch :: (Mailbox mbox) => mbox msg -> (msg -> Maybe a) -> IO a
 receiveMatch mbox f = dispatch [(f, return)] mbox
 
-receiveMatchSTM ::
-       (Mailbox mbox) => mbox msg -> (msg -> Maybe a) -> STM a
+receiveMatchSTM :: (Mailbox mbox) => mbox msg -> (msg -> Maybe a) -> STM a
 receiveMatchSTM mbox f = dispatchSTM [f] mbox
 
-atomicallyIO :: MonadIO m => STM a -> m a
-atomicallyIO = liftIO . atomically
-
-timeout :: (MonadBaseControl IO m, Forall (Pure m)) => Int -> m a -> m (Maybe a)
-timeout n action = race (threadDelay n) action >>= \case
-    Left () -> return Nothing
-    Right r -> return $ Just r
+timeout :: Int -> IO a -> IO (Maybe a)
+timeout n action =
+    race (threadDelay n) action >>= \case
+        Left () -> return Nothing
+        Right r -> return $ Just r
