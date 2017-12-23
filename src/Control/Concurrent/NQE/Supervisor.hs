@@ -2,6 +2,9 @@ module Control.Concurrent.NQE.Supervisor
     ( SupervisorMessage(..)
     , Strategy(..)
     , supervisor
+    , addChild
+    , removeChild
+    , stopSupervisor
     ) where
 
 import           Control.Applicative
@@ -12,8 +15,7 @@ import           Control.Exception
 import           Control.Monad
 
 type ActorAsync = Async ()
-type ActorFinished = Either SomeException ()
-type ActorDied = (ActorAsync, ActorFinished)
+type ActorReturn = Either SomeException ()
 type ActorAction = IO ()
 
 data SupervisorMessage
@@ -22,7 +24,7 @@ data SupervisorMessage
     | StopSupervisor
 
 data Strategy
-    = Notify (ActorDied -> IO ())
+    = Action ((ActorAsync, ActorReturn) -> IO ())
     | KillAll
     | IgnoreGraceful
     | IgnoreAll
@@ -44,36 +46,39 @@ supervisor strat mbox children = do
         e <-
             atomically $
             Right <$> receiveSTM mbox <|> Left <$> waitForChild state
-        case e of
-            Right m -> processMessage state m >> loop state
-            Left x ->
-                processDead state strat x >>= \again -> when again $ loop state
+        again <- case e of
+            Right m -> processMessage state m
+            Left x -> processDead state strat x
+        when again $ loop state
     down state = do
         as <- atomically $ readTVar state
         mapM_ cancel as
 
-waitForChild :: TVar [ActorAsync] -> STM ActorDied
+waitForChild :: TVar [ActorAsync] -> STM (ActorAsync, ActorReturn)
 waitForChild state = do
     as <- readTVar state
     waitAnyCatchSTM as
 
-processMessage :: TVar [ActorAsync] -> SupervisorMessage -> IO ()
+processMessage :: TVar [ActorAsync] -> SupervisorMessage -> IO Bool
 processMessage state (AddChild ch r) = do
     a <- async ch
     atomically $ do
         modifyTVar' state (a:)
         r a
+    return True
 processMessage state (RemoveChild a) = do
     atomically $ modifyTVar' state (filter (/= a))
     cancel a
+    return True
 processMessage state StopSupervisor = do
     as <- readTVarIO state
     forM_ as (stopChild state)
+    return False
 
 processDead ::
        TVar [ActorAsync]
     -> Strategy
-    -> ActorDied
+    -> (ActorAsync, ActorReturn)
     -> IO Bool
 processDead state IgnoreAll (a, _) = do
     atomically $ modifyTVar' state (filter (/= a))
@@ -95,7 +100,7 @@ processDead state IgnoreGraceful (a, Left e) = do
         readTVar state
     mapM_ (stopChild state) as
     throw e
-processDead state (Notify notif) (a, e) = do
+processDead state (Action notif) (a, e) = do
     atomically $ modifyTVar' state (filter (/= a))
     catch (notif (a, e) >> return True) $ \x -> do
         as <- readTVarIO state
@@ -119,3 +124,12 @@ stopChild state a = do
         writeTVar state new
         return $ cur /= new
     when isChild $ cancel a
+
+addChild :: Mailbox mbox => mbox SupervisorMessage -> ActorAction -> IO ActorAsync
+addChild mbox action = AddChild action `query` mbox
+
+removeChild :: Mailbox mbox => mbox SupervisorMessage -> ActorAsync -> IO ()
+removeChild mbox child = RemoveChild child `send` mbox
+
+stopSupervisor :: Mailbox mbox => mbox SupervisorMessage -> IO ()
+stopSupervisor mbox = StopSupervisor `send` mbox

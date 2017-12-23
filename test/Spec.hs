@@ -3,6 +3,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 import           Control.Concurrent     hiding (yield)
 import           Control.Concurrent.NQE
+import           Control.Exception
 import           Control.Monad
 import           Control.Monad.Catch
 import           Control.Monad.IO.Class
@@ -16,6 +17,13 @@ import           Test.Hspec
 
 data Pong = Pong deriving (Eq, Show)
 newtype Ping = Ping (Pong -> STM ())
+
+data TestError
+    = TestError1
+    | TestError2
+    | TestError3
+    deriving (Show, Eq)
+instance Exception TestError
 
 pong :: TQueue Ping -> IO ()
 pong mbox =
@@ -98,3 +106,63 @@ main =
             it "timeout action succeeds" $ do
                 n <- timeout 0xdeadbeef (return 0xbeef)
                 n `shouldBe` Just 0xbeef
+        describe "supervisor" $ do
+            let p1 m = forever $ receive m >>= \r -> atomically $ r ()
+                p2 = query id
+            it "all processes end without failure" $ do
+                mbox <- newTQueueIO
+                sup <- newTQueueIO
+                g <- actor $ supervisor KillAll sup [p1 mbox, p2 mbox]
+                wait g `shouldReturn` ()
+            it "one process crashes" $ do
+                mbox <- newTQueueIO
+                sup <- newTQueueIO
+                g <-
+                    actor $
+                    supervisor
+                        IgnoreGraceful
+                        sup
+                        [p1 mbox, p2 mbox >> throw TestError1]
+                wait g `shouldThrow` (== TestError1)
+            it "both processes crash" $ do
+                sup <- newTQueueIO
+                g <-
+                    actor $
+                    supervisor
+                        IgnoreGraceful
+                        sup
+                        [throw TestError1, throw TestError2]
+                wait g `shouldThrow` (\e -> e == TestError1 || e == TestError2)
+            it "process crashes ignored" $ do
+                sup <- newTQueueIO
+                g <-
+                    actor $
+                    supervisor
+                        IgnoreAll
+                        sup
+                        [throw TestError1, throw TestError2]
+                stopSupervisor sup
+                wait g `shouldReturn` ()
+            it "monitors processes" $ do
+                sup <- newTQueueIO
+                mon <- newTQueueIO
+                g <-
+                    actor $
+                    supervisor
+                        (Action (atomically . writeTQueue mon))
+                        sup
+                        [throw TestError1, throw TestError2]
+                (t1, t2) <-
+                    atomically $ (,) <$> readTQueue mon <*> readTQueue mon
+                let er e =
+                        case e of
+                            Right () -> False
+                            Left x ->
+                                case fromException x of
+                                    Just TestError1 -> True
+                                    Just TestError2 -> True
+                                    _ -> False
+                snd t1 `shouldSatisfy` er
+                snd t2 `shouldSatisfy` er
+                stopSupervisor sup
+                wait g `shouldReturn` ()
