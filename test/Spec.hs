@@ -54,11 +54,11 @@ conduits = do
 pongServer ::
        Source IO ByteString
     -> Sink ByteString IO ()
-    -> (Actor () -> IO a)
+    -> (Async () -> IO a)
     -> IO a
 pongServer source sink go = do
     mbox <- newTQueueIO
-    withActor (action mbox) go
+    withAsync (action mbox) go
   where
     action mbox = withSource src mbox . const $ processor mbox $$ snk
     src = source =$= decoder
@@ -74,7 +74,7 @@ pongClient :: Source IO ByteString
            -> IO Text
 pongClient source sink = do
     mbox <- newTQueueIO
-    withActor (action mbox) go
+    withAsync (action mbox) go
   where
     action mbox =
         withSource src mbox $ const $ processor mbox
@@ -91,7 +91,7 @@ main =
         describe "two communicating processes" $ do
             it "exchange ping/pong messages" $ do
                 mbox <- newTQueueIO
-                g <- withActor (pong mbox) $ const $ query Ping mbox
+                g <- withAsync (pong mbox) $ const $ query Ping mbox
                 g `shouldBe` Pong
         describe "network process" $ do
             it "responds to a ping" $ do
@@ -112,13 +112,13 @@ main =
             it "all processes end without failure" $ do
                 mbox <- newTQueueIO
                 sup <- newTQueueIO
-                g <- actor $ supervisor KillAll sup [p1 mbox, p2 mbox]
+                g <- async $ supervisor KillAll sup [p1 mbox, p2 mbox]
                 wait g `shouldReturn` ()
             it "one process crashes" $ do
                 mbox <- newTQueueIO
                 sup <- newTQueueIO
                 g <-
-                    actor $
+                    async $
                     supervisor
                         IgnoreGraceful
                         sup
@@ -127,7 +127,7 @@ main =
             it "both processes crash" $ do
                 sup <- newTQueueIO
                 g <-
-                    actor $
+                    async $
                     supervisor
                         IgnoreGraceful
                         sup
@@ -136,7 +136,7 @@ main =
             it "process crashes ignored" $ do
                 sup <- newTQueueIO
                 g <-
-                    actor $
+                    async $
                     supervisor
                         IgnoreAll
                         sup
@@ -147,7 +147,7 @@ main =
                 sup <- newTQueueIO
                 mon <- newTQueueIO
                 g <-
-                    actor $
+                    async $
                     supervisor
                         (Action (atomically . writeTQueue mon))
                         sup

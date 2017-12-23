@@ -1,20 +1,28 @@
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RankNTypes            #-}
 module Control.Concurrent.NQE.Network
     ( fromSource
     , withSource
     ) where
 
-import           Control.Concurrent.Async
+import           Control.Concurrent.Async.Lifted.Safe
 import           Control.Concurrent.NQE.Process
-import           Control.Monad.IO.Class         (liftIO)
+import           Control.Monad.IO.Class
+import           Control.Monad.Trans.Control
 import           Data.Conduit
 
 fromSource ::
-       Mailbox mbox
-    => Source IO msg
+       (MonadIO m, Mailbox mbox)
+    => Source m msg
     -> mbox msg -- ^ will receive all messages
-    -> IO ()
-fromSource src mbox = src $$ awaitForever (\msg -> liftIO $ msg `send` mbox)
+    -> m ()
+fromSource src mbox = src $$ awaitForever (`send` mbox)
 
 withSource ::
-       Mailbox mbox => Source IO msg -> mbox msg -> (Async () -> IO a) -> IO a
+       (MonadIO m, MonadBaseControl IO m, Forall (Pure m), Mailbox mbox)
+    => Source m msg
+    -> mbox msg
+    -> (Async () -> m a)
+    -> m a
 withSource src mbox = withAsync (fromSource src mbox)
