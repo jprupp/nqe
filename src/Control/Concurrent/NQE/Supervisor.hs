@@ -1,5 +1,6 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts          #-}
+{-# LANGUAGE GADTs                     #-}
 {-# LANGUAGE MultiParamTypeClasses     #-}
 module Control.Concurrent.NQE.Supervisor
     ( SupervisorMessage(..)
@@ -20,8 +21,8 @@ import           Control.Monad.Base
 import           Control.Monad.IO.Class
 import           Control.Monad.Trans.Control
 
-data SupervisorMessage m
-    = AddChild (m ())
+data SupervisorMessage
+    = AddChild (IO ())
                (Reply (Async ()))
     | RemoveChild (Async ())
     | StopSupervisor
@@ -35,7 +36,7 @@ data Strategy
 supervisor ::
        (MonadIO m, MonadBaseControl IO m, Forall (Pure m), Mailbox mbox)
     => Strategy
-    -> mbox (SupervisorMessage m)
+    -> mbox SupervisorMessage
     -> [m ()]
     -> m ()
 supervisor strat mbox children = do
@@ -65,18 +66,20 @@ waitForChild state = do
 processMessage ::
        (MonadIO m, MonadBaseControl IO m, Forall (Pure m))
     => TVar [Async ()]
-    -> SupervisorMessage m
+    -> SupervisorMessage
     -> m Bool
 processMessage state (AddChild ch r) = do
-    a <- async ch
+    a <- async $ liftIO ch
     liftIO . atomically $ do
         modifyTVar' state (a:)
         r a
     return True
+
 processMessage state (RemoveChild a) = do
     liftIO . atomically $ modifyTVar' state (filter (/= a))
     cancel a
     return True
+
 processMessage state StopSupervisor = do
     as <- liftIO $ readTVarIO state
     forM_ as (stopChild state)
@@ -148,18 +151,18 @@ stopChild state a = do
 
 addChild ::
        (MonadIO m, Mailbox mbox)
-    => mbox (SupervisorMessage m)
-    -> m ()
+    => mbox SupervisorMessage
+    -> IO ()
     -> m (Async ())
 addChild mbox action = AddChild action `query` mbox
 
 removeChild ::
        (MonadIO m, Mailbox mbox)
-    => mbox (SupervisorMessage m)
+    => mbox SupervisorMessage
     -> Async ()
     -> m ()
 removeChild mbox child = RemoveChild child `send` mbox
 
 stopSupervisor ::
-       (MonadIO m, Mailbox mbox) => mbox (SupervisorMessage m) -> m ()
+       (MonadIO m, Mailbox mbox) => mbox SupervisorMessage -> m ()
 stopSupervisor mbox = StopSupervisor `send` mbox
