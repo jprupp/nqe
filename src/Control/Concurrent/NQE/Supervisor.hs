@@ -29,15 +29,15 @@ data SupervisorMessage m
     | RemoveChild ActorAsync
     | StopSupervisor
 
-data Strategy m
-    = Action ((ActorAsync, ActorReturn) -> m ())
+data Strategy
+    = Notify ((ActorAsync, ActorReturn) -> STM ())
     | KillAll
     | IgnoreGraceful
     | IgnoreAll
 
 supervisor ::
        (MonadIO m, MonadBaseControl IO m, Forall (Pure m), Mailbox mbox)
-    => Strategy m
+    => Strategy
     -> mbox (SupervisorMessage m)
     -> [m ()]
     -> m ()
@@ -88,12 +88,13 @@ processMessage state StopSupervisor = do
 processDead ::
        (MonadIO m, MonadBaseControl IO m)
     => TVar [ActorAsync]
-    -> Strategy m
+    -> Strategy
     -> (ActorAsync, ActorReturn)
     -> m Bool
 processDead state IgnoreAll (a, _) = do
     liftIO . atomically $ modifyTVar' state (filter (/= a))
     return True
+
 processDead state KillAll (a, e) = do
     as <- liftIO . atomically $ do
         modifyTVar' state (filter (/= a))
@@ -102,21 +103,30 @@ processDead state KillAll (a, e) = do
     case e of
         Left x   -> throw x
         Right () -> return False
+
 processDead state IgnoreGraceful (a, Right ()) = do
     liftIO . atomically $ modifyTVar' state (filter (/= a))
     return True
+
 processDead state IgnoreGraceful (a, Left e) = do
     as <- liftIO . atomically $ do
         modifyTVar' state (filter (/= a))
         readTVar state
     mapM_ (stopChild state) as
     throw e
-processDead state (Action notif) (a, e) = do
-    liftIO . atomically $ modifyTVar' state (filter (/= a))
-    catch (notif (a, e) >> return True) $ \x -> do
-        as <- liftIO $ readTVarIO state
-        mapM_ (stopChild state) as
-        throw (x :: SomeException)
+
+processDead state (Notify notif) (a, e) = do
+    x <-
+        liftIO . atomically $ do
+            modifyTVar' state (filter (/= a))
+            catchSTM (notif (a, e) >> return Nothing) $ \x ->
+                return $ Just (x :: SomeException)
+    case x of
+        Nothing -> return True
+        Just ex -> do
+            as <- liftIO $ readTVarIO state
+            forM_ as (stopChild state)
+            throwIO ex
 
 startChild ::
        (MonadIO m, MonadBaseControl IO m, Forall (Pure m))

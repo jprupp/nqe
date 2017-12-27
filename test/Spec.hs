@@ -149,7 +149,7 @@ main =
                 g <-
                     async $
                     supervisor
-                        (Action (atomically . writeTQueue mon))
+                        (Notify (writeTQueue mon))
                         sup
                         [throw TestError1, throw TestError2]
                 (t1, t2) <-
