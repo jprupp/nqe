@@ -20,17 +20,14 @@ import           Control.Monad.Base
 import           Control.Monad.IO.Class
 import           Control.Monad.Trans.Control
 
-type ActorAsync = Async ()
-type ActorReturn = Either SomeException ()
-
 data SupervisorMessage m
     = AddChild (m ())
-               (Reply ActorAsync)
-    | RemoveChild ActorAsync
+               (Reply (Async ()))
+    | RemoveChild (Async ())
     | StopSupervisor
 
 data Strategy
-    = Notify ((ActorAsync, ActorReturn) -> STM ())
+    = Notify ((Async (), Either SomeException ()) -> STM ())
     | KillAll
     | IgnoreGraceful
     | IgnoreAll
@@ -60,14 +57,14 @@ supervisor strat mbox children = do
         as <- liftIO . atomically $ readTVar state
         mapM_ cancel as
 
-waitForChild :: TVar [ActorAsync] -> STM (ActorAsync, ActorReturn)
+waitForChild :: TVar [Async ()] -> STM (Async (), Either SomeException ())
 waitForChild state = do
     as <- readTVar state
     waitAnyCatchSTM as
 
 processMessage ::
        (MonadIO m, MonadBaseControl IO m, Forall (Pure m))
-    => TVar [ActorAsync]
+    => TVar [Async ()]
     -> SupervisorMessage m
     -> m Bool
 processMessage state (AddChild ch r) = do
@@ -87,9 +84,9 @@ processMessage state StopSupervisor = do
 
 processDead ::
        (MonadIO m, MonadBaseControl IO m)
-    => TVar [ActorAsync]
+    => TVar [Async ()]
     -> Strategy
-    -> (ActorAsync, ActorReturn)
+    -> (Async (), Either SomeException ())
     -> m Bool
 processDead state IgnoreAll (a, _) = do
     liftIO . atomically $ modifyTVar' state (filter (/= a))
@@ -130,16 +127,16 @@ processDead state (Notify notif) (a, e) = do
 
 startChild ::
        (MonadIO m, MonadBaseControl IO m, Forall (Pure m))
-    => TVar [ActorAsync]
+    => TVar [Async ()]
     -> m ()
-    -> m ActorAsync
+    -> m (Async ())
 startChild state run = do
     a <- async run
     liftIO . atomically $ modifyTVar' state (a:)
     return a
 
 stopChild ::
-       (MonadIO m, MonadBase IO m) => TVar [ActorAsync] -> ActorAsync -> m ()
+       (MonadIO m, MonadBase IO m) => TVar [Async ()] -> Async () -> m ()
 stopChild state a = do
     isChild <-
         liftIO . atomically $ do
@@ -153,13 +150,13 @@ addChild ::
        (MonadIO m, Mailbox mbox)
     => mbox (SupervisorMessage m)
     -> m ()
-    -> m ActorAsync
+    -> m (Async ())
 addChild mbox action = AddChild action `query` mbox
 
 removeChild ::
        (MonadIO m, Mailbox mbox)
     => mbox (SupervisorMessage m)
-    -> ActorAsync
+    -> Async ()
     -> m ()
 removeChild mbox child = RemoveChild child `send` mbox
 

@@ -13,7 +13,6 @@ import           Control.Monad.Trans.Control
 
 type Reply a = a -> STM ()
 type Listen a = a -> STM ()
-type Actor a = Async a
 
 class Mailbox mbox where
     mailboxEmptySTM :: mbox msg -> STM Bool
