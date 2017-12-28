@@ -1,7 +1,8 @@
-{-# LANGUAGE FlexibleContexts      #-}
-{-# LANGUAGE LambdaCase            #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE RankNTypes            #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE FlexibleContexts          #-}
+{-# LANGUAGE LambdaCase                #-}
+{-# LANGUAGE MultiParamTypeClasses     #-}
+{-# LANGUAGE RankNTypes                #-}
 module Control.Concurrent.NQE.Process where
 
 import           Control.Concurrent
@@ -31,6 +32,16 @@ instance Mailbox TBQueue where
     sendSTM msg = (`writeTBQueue` msg)
     receiveSTM = readTBQueue
     requeueMsg msg = (`unGetTBQueue` msg)
+
+data Inbox msg =
+    forall mbox. (Mailbox mbox) =>
+                 Inbox (mbox msg)
+
+instance Mailbox Inbox where
+    mailboxEmptySTM (Inbox mbox) = mailboxEmptySTM mbox
+    sendSTM msg (Inbox mbox) = msg `sendSTM` mbox
+    receiveSTM (Inbox mbox) = receiveSTM mbox
+    requeueMsg msg (Inbox mbox) = msg `requeueMsg` mbox
 
 mailboxEmpty :: (MonadIO m, Mailbox mbox) => mbox msg -> m Bool
 mailboxEmpty = liftIO . atomically . mailboxEmptySTM
