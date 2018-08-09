@@ -1,57 +1,72 @@
-name:                nqe
-version:             0.1.0.0
-synopsis:            Concurrency library in the style of Erlang/OTP
-description:
-    Follow the example of Erlang developing a minimalistic actor library with a
-    distinct Haskell flavour. It does not implement Erlang/OTP-style processes
-    exactly, but it is merely inspired by their philosophy.
-homepage:            https://github.com/xenog/nqe#readme
-license:             PublicDomain
-license-file:        UNLICENSE
-author:              Jean-Pierre Rupp
-maintainer:          xenog@protonmail.com
-category:            Control
-build-type:          Simple
-extra-source-files:  README.md
-cabal-version:       >=1.10
+-- This file has been generated from package.yaml by hpack version 0.20.0.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: f2210752ccb7e4fd3836c100f3ac7b55c43f17a9d0afa1d11a18543f2626bfbf
 
-library
-  hs-source-dirs:      src
-  exposed-modules:     Control.Concurrent.NQE
-  other-modules:       Control.Concurrent.NQE.Process
-                       Control.Concurrent.NQE.Network
-                       Control.Concurrent.NQE.Supervisor
-  build-depends:       base >= 4.7 && < 5
-                     , bytestring >= 0.10 && < 0.11
-                     , conduit >= 1.2 && < 1.3
-                     , conduit-extra >= 1.1 && < 1.3
-                     , containers >= 0.5 && < 0.6
-                     , async >= 2.1 && < 2.3
-                     , lifted-async >= 0.9 && < 0.10
-                     , lifted-base >= 0.2 && < 0.3
-                     , transformers-base >= 0.4 && < 0.5
-                     , monad-control >= 1.0 && < 1.1
-                     , stm >= 2.4 && < 3
-  default-language:    Haskell2010
+name:           nqe
+version:        0.1.0.1
+synopsis:       Concurrency library in the style of Erlang/OTP
+description:    Minimalistic actor library inspired by Erlang/OTP with support for supervisor hierarchies and asynchronous messages, as well as abstractions for synchronous communication and easy management of TCP connections.
+category:       Control
+homepage:       https://github.com/xenog/nqe#readme
+bug-reports:    https://github.com/xenog/nqe/issues
+author:         Jean-Pierre Rupp
+maintainer:     xenog@protonmail.com
+license:        PublicDomain
+license-file:   UNLICENSE
+build-type:     Simple
+cabal-version:  >= 1.10
 
-test-suite nqe-test
-  type:                exitcode-stdio-1.0
-  hs-source-dirs:      test
-  main-is:             Spec.hs
-  build-depends:       base
-                     , nqe
-                     , bytestring >= 0.10 && < 0.11
-                     , conduit >= 1.2 && < 1.3
-                     , conduit-extra >= 1.1 && < 1.3
-                     , exceptions >= 0.8 && < 0.9
-                     , async >= 2.1 && < 2.3
-                     , hspec >= 2.4 && < 3
-                     , stm >= 2.4 && < 3
-                     , stm-conduit >= 3.0 && < 3.1
-                     , text >= 1.2 && < 1.3
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
-  default-language:    Haskell2010
+extra-source-files:
+    README.md
 
 source-repository head
-  type:     git
+  type: git
   location: https://github.com/xenog/nqe
+
+library
+  hs-source-dirs:
+      src
+  build-depends:
+      async >=2.1 && <2.3
+    , base >=4.7 && <5
+    , bytestring >=0.10 && <0.11
+    , conduit >=1.2 && <1.3
+    , conduit-extra >=1.1 && <1.3
+    , containers >=0.5 && <0.6
+    , lifted-async >=0.9 && <0.10
+    , lifted-base >=0.2 && <0.3
+    , monad-control >=1.0 && <1.1
+    , stm >=2.4 && <3
+    , transformers-base >=0.4 && <0.5
+  exposed-modules:
+      Control.Concurrent.NQE
+  other-modules:
+      Control.Concurrent.NQE.Network
+      Control.Concurrent.NQE.Process
+      Control.Concurrent.NQE.Supervisor
+      Paths_nqe
+  default-language: Haskell2010
+
+test-suite nqe-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  hs-source-dirs:
+      test
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      async >=2.1 && <2.3
+    , base
+    , bytestring >=0.10 && <0.11
+    , conduit >=1.2 && <1.3
+    , conduit-extra >=1.1 && <1.3
+    , exceptions >=0.8 && <0.9
+    , hspec >=2.4 && <3
+    , nqe
+    , stm >=2.4 && <3
+    , stm-conduit >=3.0 && <3.1
+    , text >=1.2 && <1.3
+  other-modules:
+      Paths_nqe
+  default-language: Haskell2010
