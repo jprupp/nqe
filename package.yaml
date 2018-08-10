@@ -11,22 +11,22 @@ github: xenog/nqe
 extra-source-files:
 - README.md
 dependencies:
-- bytestring >=0.10 && <0.11
-- conduit >=1.2 && <1.3
-- conduit-extra >=1.1 && <1.3
-- async >=2.1 && <2.3
-- stm >=2.4 && <3
+- bytestring
+- conduit
+- conduit-extra
+- async
+- stm
 library:
   source-dirs: src
   exposed-modules:
   - Control.Concurrent.NQE
   dependencies:
-  - base >=4.7 && <5
-  - containers >=0.5 && <0.6
-  - lifted-async >=0.9 && <0.10
-  - lifted-base >=0.2 && <0.3
-  - transformers-base >=0.4 && <0.5
-  - monad-control >=1.0 && <1.1
+  - base
+  - containers
+  - lifted-async
+  - lifted-base
+  - transformers-base
+  - monad-control
 tests:
   nqe-test:
     main: Spec.hs
@@ -38,7 +38,7 @@ tests:
     dependencies:
     - base
     - nqe
-    - exceptions >=0.8 && <0.9
-    - hspec >=2.4 && <3
-    - stm-conduit >=3.0 && <3.1
-    - text >=1.2 && <1.3
+    - exceptions
+    - hspec
+    - stm-conduit
+    - text

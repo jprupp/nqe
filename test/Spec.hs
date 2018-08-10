@@ -46,9 +46,9 @@ conduits = do
     inChan <- newTBMChanIO 2048
     outChan <- newTBMChanIO 2048
     return ( sourceTBMChan inChan
-           , sinkTBMChan outChan True
+           , sinkTBMChan outChan
            , sourceTBMChan outChan
-           , sinkTBMChan inChan True
+           , sinkTBMChan inChan
            )
 
 pongServer ::
