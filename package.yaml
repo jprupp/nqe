@@ -1,5 +1,5 @@
 name: nqe
-version: '0.1.0.1'
+version: '0.2.0.0'
 synopsis: Concurrency library in the style of Erlang/OTP
 description: 'Minimalistic actor library inspired by Erlang/OTP with support for supervisor hierarchies and asynchronous messages, as well as abstractions for synchronous communication and easy management of TCP connections.'
 category: Control
@@ -14,8 +14,8 @@ dependencies:
 - bytestring
 - conduit
 - conduit-extra
-- async
 - stm
+- unliftio
 library:
   source-dirs: src
   exposed-modules:
@@ -23,10 +23,6 @@ library:
   dependencies:
   - base >=4.7 && <5
   - containers
-  - lifted-async
-  - lifted-base
-  - transformers-base
-  - monad-control
 tests:
   nqe-test:
     main: Spec.hs
@@ -38,7 +34,7 @@ tests:
     dependencies:
     - base >=4.7 && <5
     - nqe
-    - exceptions
     - hspec
+    - exceptions
     - stm-conduit
     - text

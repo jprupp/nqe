@@ -2,10 +2,10 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 8e3fef9a7a4c6b1d175f3c2667594ea27d1a60884fcc25429d83e0f5a27c0616
+-- hash: 19f64f288f8fa8f0b4739515e746d714754ce23701b7de65011a179d52826f16
 
 name:           nqe
-version:        0.1.0.1
+version:        0.2.0.0
 synopsis:       Concurrency library in the style of Erlang/OTP
 description:    Minimalistic actor library inspired by Erlang/OTP with support for supervisor hierarchies and asynchronous messages, as well as abstractions for synchronous communication and easy management of TCP connections.
 category:       Control
@@ -29,17 +29,13 @@ library
   hs-source-dirs:
       src
   build-depends:
-      async
-    , base >=4.7 && <5
+      base >=4.7 && <5
     , bytestring
     , conduit
     , conduit-extra
     , containers
-    , lifted-async
-    , lifted-base
-    , monad-control
     , stm
-    , transformers-base
+    , unliftio
   exposed-modules:
       Control.Concurrent.NQE
   other-modules:
@@ -56,8 +52,7 @@ test-suite nqe-test
       test
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      async
-    , base >=4.7 && <5
+      base >=4.7 && <5
     , bytestring
     , conduit
     , conduit-extra
@@ -67,6 +62,7 @@ test-suite nqe-test
     , stm
     , stm-conduit
     , text
+    , unliftio
   other-modules:
       Paths_nqe
   default-language: Haskell2010

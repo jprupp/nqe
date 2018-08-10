@@ -5,12 +5,9 @@
 {-# LANGUAGE RankNTypes                #-}
 module Control.Concurrent.NQE.Process where
 
-import           Control.Concurrent
-import           Control.Concurrent.Async.Lifted.Safe
-import           Control.Concurrent.STM
 import           Control.Monad
-import           Control.Monad.IO.Class
-import           Control.Monad.Trans.Control
+import           UnliftIO
+import           UnliftIO.Concurrent
 
 type Reply a = a -> STM ()
 type Listen a = a -> STM ()
@@ -104,7 +101,7 @@ receiveMatchSTM :: (Mailbox mbox) => mbox msg -> (msg -> Maybe a) -> STM a
 receiveMatchSTM mbox f = dispatchSTM [f] mbox
 
 timeout ::
-       forall m b. (MonadIO m, MonadBaseControl IO m, Forall (Pure m))
+       forall m b. (MonadUnliftIO m)
     => Int
     -> m b
     -> m (Maybe b)

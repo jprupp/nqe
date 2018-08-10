@@ -6,22 +6,20 @@ module Control.Concurrent.NQE.Network
     , withSource
     ) where
 
-import           Control.Concurrent.Async.Lifted.Safe
 import           Control.Concurrent.NQE.Process
-import           Control.Monad.IO.Class
-import           Control.Monad.Trans.Control
 import           Data.Conduit
+import           UnliftIO
 
 fromSource ::
        (MonadIO m, Mailbox mbox)
-    => Source m msg
+    => ConduitT () msg m ()
     -> mbox msg -- ^ will receive all messages
     -> m ()
-fromSource src mbox = src $$ awaitForever (`send` mbox)
+fromSource src mbox = runConduit $ src .| awaitForever (`send` mbox)
 
 withSource ::
-       (MonadIO m, MonadBaseControl IO m, Forall (Pure m), Mailbox mbox)
-    => Source m msg
+       (MonadUnliftIO m, Mailbox mbox)
+    => ConduitT () msg m ()
     -> mbox msg
     -> (Async () -> m a)
     -> m a

@@ -12,14 +12,10 @@ module Control.Concurrent.NQE.Supervisor
     ) where
 
 import           Control.Applicative
-import           Control.Concurrent.Async.Lifted.Safe
 import           Control.Concurrent.NQE.Process
-import           Control.Concurrent.STM
-import           Control.Exception.Lifted
 import           Control.Monad
-import           Control.Monad.Base
-import           Control.Monad.IO.Class
-import           Control.Monad.Trans.Control
+import           Control.Monad.STM              (catchSTM)
+import           UnliftIO
 
 data SupervisorMessage
     = AddChild (IO ())
@@ -34,7 +30,7 @@ data Strategy
     | IgnoreAll
 
 supervisor ::
-       (MonadIO m, MonadBaseControl IO m, Forall (Pure m), Mailbox mbox)
+       (MonadUnliftIO m, Mailbox mbox)
     => Strategy
     -> mbox SupervisorMessage
     -> [m ()]
@@ -64,7 +60,7 @@ waitForChild state = do
     waitAnyCatchSTM as
 
 processMessage ::
-       (MonadIO m, MonadBaseControl IO m, Forall (Pure m))
+       (MonadUnliftIO m)
     => TVar [Async ()]
     -> SupervisorMessage
     -> m Bool
@@ -86,7 +82,7 @@ processMessage state StopSupervisor = do
     return False
 
 processDead ::
-       (MonadIO m, MonadBaseControl IO m)
+       (MonadUnliftIO m)
     => TVar [Async ()]
     -> Strategy
     -> (Async (), Either SomeException ())
@@ -101,7 +97,7 @@ processDead state KillAll (a, e) = do
         readTVar state
     mapM_ (stopChild state) as
     case e of
-        Left x   -> throw x
+        Left x   -> throwIO x
         Right () -> return False
 
 processDead state IgnoreGraceful (a, Right ()) = do
@@ -113,7 +109,7 @@ processDead state IgnoreGraceful (a, Left e) = do
         modifyTVar' state (filter (/= a))
         readTVar state
     mapM_ (stopChild state) as
-    throw e
+    throwIO e
 
 processDead state (Notify notif) (a, e) = do
     x <-
@@ -129,7 +125,7 @@ processDead state (Notify notif) (a, e) = do
             throwIO ex
 
 startChild ::
-       (MonadIO m, MonadBaseControl IO m, Forall (Pure m))
+       (MonadUnliftIO m)
     => TVar [Async ()]
     -> m ()
     -> m (Async ())
@@ -139,7 +135,7 @@ startChild state run = do
     return a
 
 stopChild ::
-       (MonadIO m, MonadBase IO m) => TVar [Async ()] -> Async () -> m ()
+       (MonadUnliftIO m) => TVar [Async ()] -> Async () -> m ()
 stopChild state a = do
     isChild <-
         liftIO . atomically $ do

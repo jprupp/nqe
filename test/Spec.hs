@@ -6,14 +6,15 @@ import           Control.Concurrent.NQE
 import           Control.Exception
 import           Control.Monad
 import           Control.Monad.Catch
-import           Control.Monad.IO.Class
 import           Data.ByteString        (ByteString)
-import           Data.Conduit
+import           Conduit
 import           Data.Conduit.Text      (decode, encode, utf8)
 import qualified Data.Conduit.Text      as CT
 import           Data.Conduit.TMChan
 import           Data.Text              (Text)
 import           Test.Hspec
+import           UnliftIO.Async
+import           UnliftIO.STM
 
 data Pong = Pong deriving (Eq, Show)
 newtype Ping = Ping (Pong -> STM ())
@@ -31,17 +32,17 @@ pong mbox =
         Ping reply <- receive mbox
         atomically (reply Pong)
 
-encoder :: MonadThrow m => Conduit Text m ByteString
+encoder :: MonadThrow m => ConduitT Text ByteString m ()
 encoder = encode utf8
 
-decoder :: MonadThrow m => Conduit ByteString m Text
-decoder = decode utf8 =$= CT.lines
+decoder :: MonadThrow m => ConduitT ByteString Text m ()
+decoder = decode utf8 .| CT.lines
 
 conduits ::
-       IO ( Source IO ByteString
-          , Sink ByteString IO ()
-          , Source IO ByteString
-          , Sink ByteString IO ())
+       IO ( ConduitT () ByteString IO ()
+          , ConduitT ByteString Void IO ()
+          , ConduitT () ByteString IO ()
+          , ConduitT ByteString Void IO ())
 conduits = do
     inChan <- newTBMChanIO 2048
     outChan <- newTBMChanIO 2048
@@ -52,25 +53,26 @@ conduits = do
            )
 
 pongServer ::
-       Source IO ByteString
-    -> Sink ByteString IO ()
+       ConduitT () ByteString IO ()
+    -> ConduitT ByteString Void IO ()
     -> (Async () -> IO a)
     -> IO a
 pongServer source sink go = do
     mbox <- newTQueueIO
     withAsync (action mbox) go
   where
-    action mbox = withSource src mbox . const $ processor mbox $$ snk
-    src = source =$= decoder
-    snk = encoder =$= sink
+    action mbox =
+        withSource src mbox . const . runConduit $ processor mbox .| snk
+    src = source .| decoder
+    snk = encoder .| sink
     processor mbox =
         forever $
-        liftIO (receive mbox) >>= \case
+        receive mbox >>= \case
             ("ping" :: Text) -> yield ("pong\n" :: Text)
             _ -> return ()
 
-pongClient :: Source IO ByteString
-           -> Sink ByteString IO ()
+pongClient :: ConduitT () ByteString IO ()
+           -> ConduitT ByteString Void IO ()
            -> IO Text
 pongClient source sink = do
     mbox <- newTQueueIO
@@ -79,10 +81,10 @@ pongClient source sink = do
     action mbox =
         withSource src mbox $ const $ processor mbox
     go = wait
-    src = source =$= decoder
-    snk = encoder =$= sink
+    src = source .| decoder
+    snk = encoder .| sink
     processor mbox = do
-        yield ("ping\n" :: Text) $$ snk
+        runConduit $ yield ("ping\n" :: Text) .| snk
         receive mbox
 
 main :: IO ()
@@ -161,7 +163,7 @@ main =
                                 case fromException x of
                                     Just TestError1 -> True
                                     Just TestError2 -> True
-                                    _ -> False
+                                    _               -> False
                 snd t1 `shouldSatisfy` er
                 snd t2 `shouldSatisfy` er
                 stopSupervisor sup
