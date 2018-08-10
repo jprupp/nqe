@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: e0642a1eaaaaab009401efcbddf5e97debbf1d18b32468394f1d859359deda46
+-- hash: 8e3fef9a7a4c6b1d175f3c2667594ea27d1a60884fcc25429d83e0f5a27c0616
 
 name:           nqe
 version:        0.1.0.1
@@ -30,7 +30,7 @@ library
       src
   build-depends:
       async
-    , base
+    , base >=4.7 && <5
     , bytestring
     , conduit
     , conduit-extra
@@ -57,7 +57,7 @@ test-suite nqe-test
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       async
-    , base
+    , base >=4.7 && <5
     , bytestring
     , conduit
     , conduit-extra

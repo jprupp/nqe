@@ -21,7 +21,7 @@ library:
   exposed-modules:
   - Control.Concurrent.NQE
   dependencies:
-  - base
+  - base >=4.7 && <5
   - containers
   - lifted-async
   - lifted-base
@@ -36,7 +36,7 @@ tests:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - base
+    - base >=4.7 && <5
     - nqe
     - exceptions
     - hspec
