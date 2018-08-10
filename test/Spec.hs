@@ -13,8 +13,7 @@ import qualified Data.Conduit.Text      as CT
 import           Data.Conduit.TMChan
 import           Data.Text              (Text)
 import           Test.Hspec
-import           UnliftIO.Async
-import           UnliftIO.STM
+import           UnliftIO
 
 data Pong = Pong deriving (Eq, Show)
 newtype Ping = Ping (Pong -> STM ())

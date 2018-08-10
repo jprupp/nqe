@@ -1,13 +1,11 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts          #-}
-{-# LANGUAGE LambdaCase                #-}
 {-# LANGUAGE MultiParamTypeClasses     #-}
 {-# LANGUAGE RankNTypes                #-}
 module Control.Concurrent.NQE.Process where
 
 import           Control.Monad
 import           UnliftIO
-import           UnliftIO.Concurrent
 
 type Reply a = a -> STM ()
 type Listen a = a -> STM ()
@@ -99,13 +97,3 @@ receiveMatch mbox f = dispatch [(f, return)] mbox
 
 receiveMatchSTM :: (Mailbox mbox) => mbox msg -> (msg -> Maybe a) -> STM a
 receiveMatchSTM mbox f = dispatchSTM [f] mbox
-
-timeout ::
-       forall m b. (MonadUnliftIO m)
-    => Int
-    -> m b
-    -> m (Maybe b)
-timeout n action =
-    race (liftIO $ threadDelay n) action >>= \case
-        Left () -> return Nothing
-        Right r -> return $ Just r
