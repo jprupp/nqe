@@ -39,10 +39,10 @@ instance Mailbox Inbox where
     requeueMsg msg (Inbox mbox) = msg `requeueMsg` mbox
 
 mailboxEmpty :: (MonadIO m, Mailbox mbox) => mbox msg -> m Bool
-mailboxEmpty = liftIO . atomically . mailboxEmptySTM
+mailboxEmpty = atomically . mailboxEmptySTM
 
 send :: (MonadIO m, Mailbox mbox) => msg -> mbox msg -> m ()
-send msg = liftIO . atomically . sendSTM msg
+send msg = atomically . sendSTM msg
 
 requeue :: (Mailbox mbox) => [msg] -> mbox msg -> STM ()
 requeue xs mbox = mapM_ (`requeueMsg` mbox) xs
@@ -72,16 +72,16 @@ query ::
     -> mbox msg
     -> m b
 query f mbox = do
-    box <- liftIO $ atomically newEmptyTMVar
+    box <- atomically newEmptyTMVar
     f (putTMVar box) `send` mbox
-    liftIO . atomically $ takeTMVar box
+    atomically (takeTMVar box)
 
 dispatch ::
        (MonadIO m, Mailbox mbox)
-    => [(msg -> Maybe a, a -> IO b)] -- ^ action to dispatch
+    => [(msg -> Maybe a, a -> m b)] -- ^ action to dispatch
     -> mbox msg -- ^ mailbox to read from
     -> m b
-dispatch hs = liftIO . join . atomically . extractMsg hs
+dispatch hs = join . atomically . extractMsg hs
 
 dispatchSTM :: (Mailbox mbox) => [msg -> Maybe a] -> mbox msg -> STM a
 dispatchSTM = extractMsg . map (\x -> (x, id))
