@@ -17,9 +17,9 @@ import           Control.Monad
 import           Control.Monad.STM              (catchSTM)
 import           UnliftIO
 
-data SupervisorMessage m
-    = MonadUnliftIO m =>
-      AddChild (m ())
+data SupervisorMessage n
+    = MonadUnliftIO n =>
+      AddChild (n ())
                (Reply (Async ()))
     | RemoveChild (Async ())
     | StopSupervisor
@@ -37,7 +37,7 @@ supervisor ::
     -> [m ()]
     -> m ()
 supervisor strat mbox children = do
-    state <- liftIO $ newTVarIO []
+    state <- newTVarIO []
     finally (go state) (down state)
   where
     go state = do
@@ -47,9 +47,10 @@ supervisor strat mbox children = do
         e <-
             atomically $
             Right <$> receiveSTM mbox <|> Left <$> waitForChild state
-        again <- case e of
-            Right m -> processMessage state m
-            Left x  -> processDead state strat x
+        again <-
+            case e of
+                Right m -> processMessage state m
+                Left x  -> processDead state strat x
         when again $ loop state
     down state = do
         as <- atomically (readTVar state)
@@ -83,7 +84,7 @@ processMessage state StopSupervisor = do
     return False
 
 processDead ::
-       (MonadUnliftIO m)
+       (MonadIO m)
     => TVar [Async ()]
     -> Strategy
     -> (Async (), Either SomeException ())
@@ -121,7 +122,7 @@ processDead state (Notify notif) (a, e) = do
     case x of
         Nothing -> return True
         Just ex -> do
-            as <- liftIO $ readTVarIO state
+            as <- readTVarIO state
             forM_ as (stopChild state)
             throwIO ex
 
@@ -135,8 +136,7 @@ startChild state run = do
     atomically (modifyTVar' state (a:))
     return a
 
-stopChild ::
-       (MonadUnliftIO m) => TVar [Async ()] -> Async () -> m ()
+stopChild :: MonadIO m => TVar [Async ()] -> Async () -> m ()
 stopChild state a = do
     isChild <-
         atomically $ do
@@ -147,19 +147,21 @@ stopChild state a = do
     when isChild (cancel a)
 
 addChild ::
-       (MonadUnliftIO m, Mailbox mbox)
-    => mbox (SupervisorMessage m)
-    -> m ()
+       (MonadUnliftIO n, MonadIO m, Mailbox mbox)
+    => mbox (SupervisorMessage n)
+    -> n ()
     -> m (Async ())
 addChild mbox action = AddChild action `query` mbox
 
 removeChild ::
-       (MonadIO m, Mailbox mbox)
-    => mbox (SupervisorMessage m)
+       (MonadUnliftIO n, MonadIO m, Mailbox mbox)
+    => mbox (SupervisorMessage n)
     -> Async ()
     -> m ()
 removeChild mbox child = RemoveChild child `send` mbox
 
 stopSupervisor ::
-       (MonadIO m, Mailbox mbox) => mbox (SupervisorMessage m) -> m ()
+       (MonadUnliftIO n, MonadIO m, Mailbox mbox)
+    => mbox (SupervisorMessage n)
+    -> m ()
 stopSupervisor mbox = StopSupervisor `send` mbox
