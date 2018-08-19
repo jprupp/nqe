@@ -89,12 +89,12 @@ pongClient source sink = do
 main :: IO ()
 main =
     hspec $ do
-        describe "two communicating processes" $ do
+        describe "two communicating processes" $
             it "exchange ping/pong messages" $ do
                 mbox <- newTQueueIO
                 g <- withAsync (pong mbox) $ const $ query Ping mbox
                 g `shouldBe` Pong
-        describe "network process" $ do
+        describe "network process" $
             it "responds to a ping" $ do
                 (source1, sink1, source2, sink2) <- conduits
                 msg <-
@@ -105,7 +105,7 @@ main =
                 n <- timeout 0xbeef (threadDelay 0xdeadbeef)
                 n `shouldBe` Nothing
             it "timeout action succeeds" $ do
-                n <- timeout 0xdeadbeef (return 0xbeef)
+                n <- timeout 0xdeadbeef (return (0xbeef :: Integer))
                 n `shouldBe` Just 0xbeef
         describe "supervisor" $ do
             let p1 m = forever $ receive m >>= \r -> atomically $ r ()
@@ -162,8 +162,21 @@ main =
                                 case fromException x of
                                     Just TestError1 -> True
                                     Just TestError2 -> True
-                                    _               -> False
+                                    _ -> False
                 snd t1 `shouldSatisfy` er
                 snd t2 `shouldSatisfy` er
                 stopSupervisor sup
                 wait g `shouldReturn` ()
+        describe "pubsub" $
+            it "sends messages to all subscribers" $ do
+                let msgs = words "hello world"
+                pub <- newTQueueIO
+                events <- newTQueueIO
+                withAsync (publisher pub events) $ \_ ->
+                    withPubSub pub $ \sub1 ->
+                        withPubSub pub $ \sub2 -> do
+                            mapM_ (`send` events) msgs
+                            sub1msgs <- replicateM 2 (receive sub1)
+                            sub2msgs <- replicateM 2 (receive sub2)
+                            sub1msgs `shouldBe` msgs
+                            sub2msgs `shouldBe` msgs

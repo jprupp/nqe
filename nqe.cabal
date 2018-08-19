@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: dc6bb22e77a57baf3fc17096d4e5200450a75fa52503dc24a1862fbc6db3496e
+-- hash: de1a0da5c529cdb09e2568523a6e70f25207990d338aa9f60d9c9a2f3a3f1b22
 
 name:           nqe
 version:        1.0.0
@@ -35,6 +35,7 @@ library
     , conduit
     , conduit-extra
     , containers
+    , mtl
     , stm
     , unliftio
   exposed-modules:
@@ -42,6 +43,7 @@ library
   other-modules:
       Control.Concurrent.NQE.Network
       Control.Concurrent.NQE.Process
+      Control.Concurrent.NQE.PubSub
       Control.Concurrent.NQE.Supervisor
       Paths_nqe
   default-language: Haskell2010
