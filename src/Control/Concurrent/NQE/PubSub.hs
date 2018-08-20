@@ -1,5 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
-module Control.Concurrent.NQE.PubSub (publisher, withPubSub) where
+module Control.Concurrent.NQE.PubSub (Publisher, publisher, withPubSub) where
 
 import           Control.Applicative
 import           Control.Concurrent.NQE.Process
