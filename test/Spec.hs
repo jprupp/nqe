@@ -1,13 +1,14 @@
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+import           Conduit
 import           Control.Concurrent     hiding (yield)
 import           Control.Concurrent.NQE
+import           Control.Concurrent.STM (retry)
 import           Control.Exception
 import           Control.Monad
 import           Control.Monad.Catch
 import           Data.ByteString        (ByteString)
-import           Conduit
 import           Data.Conduit.Text      (decode, encode, utf8)
 import qualified Data.Conduit.Text      as CT
 import           Data.Conduit.TMChan
@@ -167,7 +168,7 @@ main =
                 snd t2 `shouldSatisfy` er
                 stopSupervisor sup
                 wait g `shouldReturn` ()
-        describe "pubsub" $
+        describe "pubsub" $ do
             it "sends messages to all subscribers" $ do
                 let msgs = words "hello world"
                 pub <- newTQueueIO
@@ -180,3 +181,16 @@ main =
                             sub2msgs <- replicateM 2 (receive sub2)
                             sub1msgs `shouldBe` msgs
                             sub2msgs `shouldBe` msgs
+            it "drops messages when bounded queue full" $ do
+                let msgs = words "hello world drop"
+                pub <- newTQueueIO
+                events <- newTQueueIO
+                withAsync (boundedPublisher pub events) $ \_ ->
+                    withBoundedPubSub 2 pub $ \sub -> do
+                        mapM_ (`send` events) msgs
+                        atomically $
+                            isFullTBQueue sub >>= \full -> when (not full) retry
+                        msgs <- replicateM 2 (receive sub)
+                        "meh" `send` events
+                        msg <- receive sub
+                        msgs <> [msg] `shouldBe` (words "hello world meh")

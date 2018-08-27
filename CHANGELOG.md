@@ -13,3 +13,4 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - Supervisors for `MonadUnliftIO` actions.
 - Test suite.
 - PubSub actor.
+- Support for bounded PubSub subscribers.

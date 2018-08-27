@@ -12,19 +12,22 @@ extra-source-files:
 - README.md
 - CHANGELOG.md
 dependencies:
+- base >=4.7 && <5
 - bytestring
 - conduit
 - conduit-extra
+- containers
+- exceptions
+- hspec
+- mtl
 - stm
+- stm-conduit
+- text
 - unliftio
 library:
   source-dirs: src
   exposed-modules:
   - Control.Concurrent.NQE
-  dependencies:
-  - base >=4.7 && <5
-  - containers
-  - mtl
 tests:
   nqe-test:
     main: Spec.hs
@@ -34,9 +37,4 @@ tests:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - base >=4.7 && <5
     - nqe
-    - hspec
-    - exceptions
-    - stm-conduit
-    - text

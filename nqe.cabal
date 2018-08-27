@@ -1,8 +1,8 @@
--- This file has been generated from package.yaml by hpack version 0.20.0.
+-- This file has been generated from package.yaml by hpack version 0.28.2.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: de1a0da5c529cdb09e2568523a6e70f25207990d338aa9f60d9c9a2f3a3f1b22
+-- hash: 22784335442174dea355e8accdedf5c744ab00335688baafc95dc2ed27446f8c
 
 name:           nqe
 version:        1.0.0
@@ -17,7 +17,6 @@ license:        PublicDomain
 license-file:   UNLICENSE
 build-type:     Simple
 cabal-version:  >= 1.10
-
 extra-source-files:
     CHANGELOG.md
     README.md
@@ -35,8 +34,12 @@ library
     , conduit
     , conduit-extra
     , containers
+    , exceptions
+    , hspec
     , mtl
     , stm
+    , stm-conduit
+    , text
     , unliftio
   exposed-modules:
       Control.Concurrent.NQE
@@ -59,8 +62,10 @@ test-suite nqe-test
     , bytestring
     , conduit
     , conduit-extra
+    , containers
     , exceptions
     , hspec
+    , mtl
     , nqe
     , stm
     , stm-conduit
