@@ -103,11 +103,13 @@ processBound (Control (Unsubscribe mbox)) = do
     box <- ask
     atomically (modifyTVar box (delete mbox))
 
-processBound (Event event) = do
-    box <- ask
-    readTVarIO box >>= \subs -> forM_ subs $ \sub -> atomically $ do
-        full <- isFullTBQueue sub
-        when (not full) (event `sendSTM` sub)
+processBound (Event event) =
+    ask >>= \box ->
+        atomically $
+        readTVar box >>= \subs ->
+            forM_ subs $ \sub ->
+                isFullTBQueue sub >>= \full ->
+                    when (not full) (event `sendSTM` sub)
 
 process ::
        (Eq (ch msg), Mailbox ch, MonadIO m, MonadReader (TVar [ch msg]) m)
