@@ -2,10 +2,10 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 22784335442174dea355e8accdedf5c744ab00335688baafc95dc2ed27446f8c
+-- hash: 1fd3035db301b81bce304fc8b3046396a8ed2fe1f7305463ac9bdac15f4029f7
 
 name:           nqe
-version:        1.0.0
+version:        0.4.0
 synopsis:       Concurrency library in the style of Erlang/OTP
 description:    Minimalistic actor library inspired by Erlang/OTP with support for supervisor hierarchies and asynchronous messages, as well as abstractions for synchronous communication and easy management of TCP connections.
 category:       Control
