@@ -1,5 +1,5 @@
 name: nqe
-version: 0.4.0
+version: 0.4.1
 synopsis: Concurrency library in the style of Erlang/OTP
 description: 'Minimalistic actor library inspired by Erlang/OTP with support for supervisor hierarchies and asynchronous messages, as well as abstractions for synchronous communication and easy management of TCP connections.'
 category: Control
@@ -9,32 +9,33 @@ license: PublicDomain
 license-file: UNLICENSE
 github: xenog/nqe
 extra-source-files:
-- README.md
-- CHANGELOG.md
+  - README.md
+  - CHANGELOG.md
 dependencies:
-- base >=4.7 && <5
-- bytestring
-- conduit
-- conduit-extra
-- containers
-- exceptions
-- hspec
-- mtl
-- stm
-- stm-conduit
-- text
-- unliftio
+  - base >=4.7 && <5
+  - conduit
+  - stm
+  - unliftio
 library:
   source-dirs: src
   exposed-modules:
-  - Control.Concurrent.NQE
+    - Control.Concurrent.NQE
+  dependencies:
+    - containers
+    - mtl
 tests:
   nqe-test:
     main: Spec.hs
     source-dirs: test
     ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
+      - -threaded
+      - -rtsopts
+      - -with-rtsopts=-N
     dependencies:
-    - nqe
+      - bytestring
+      - conduit-extra
+      - exceptions
+      - hspec
+      - nqe
+      - stm-conduit
+      - text
