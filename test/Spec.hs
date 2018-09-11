@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 import           Conduit
-import           Control.Concurrent.STM (retry)
+import           Control.Concurrent.STM (check)
 import           Control.Exception
 import           Control.Monad
 import           Data.ByteString        (ByteString)
@@ -184,8 +184,9 @@ main =
                     const $
                     withPubSub pub (newTBQueueIO 2) $ \sub -> do
                         mapM_ (`send` events) msgs
-                        atomically $
-                            mailboxFullSTM sub >>= \full -> unless full retry
+                        atomically $ do
+                            check =<< mailboxFullSTM sub
+                            check =<< mailboxEmptySTM events
                         msgs' <- replicateM 2 (receive sub)
                         "meh" `send` events
                         msg <- receive sub
