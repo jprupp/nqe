@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## 0.5.0
+### Added
+- `Inbox` type is now comparable for equality.
+- Haddock documentation for all functions, types and classes.
+
+### Changed
+- Change `Mailbox` typeclass.
+- Simplify PubSub module.
+- Replace network features with a single conduit.
+- Multiple API changes.
+
+### Removed
+- Remove dispatcher functions.
+
 ## 0.4.1
 ### Changed
 - Specify different dependencies for test and library.

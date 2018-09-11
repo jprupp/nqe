@@ -3,8 +3,7 @@
 {-# LANGUAGE GADTs                     #-}
 {-# LANGUAGE MultiParamTypeClasses     #-}
 module Control.Concurrent.NQE.Supervisor
-    ( SupervisorMessage(..)
-    , Strategy(..)
+    ( Strategy(..)
     , supervisor
     , addChild
     , removeChild
@@ -17,6 +16,7 @@ import           Control.Monad
 import           Control.Monad.STM              (catchSTM)
 import           UnliftIO
 
+-- | A supervisor will start, stop and monitor processes.
 data SupervisorMessage n
     = MonadUnliftIO n =>
       AddChild (n ())
@@ -24,16 +24,23 @@ data SupervisorMessage n
     | RemoveChild (Async ())
     | StopSupervisor
 
+-- | Supervisor strategies to decide what to do when a child stops.
 data Strategy
     = Notify ((Async (), Either SomeException ()) -> STM ())
+    -- ^ run this 'STM' action when a process stops
     | KillAll
+    -- ^ kill all processes and propagate exception
     | IgnoreGraceful
+    -- ^ ignore processes that stop without raising exceptions
     | IgnoreAll
+    -- ^ do nothing and keep running if a process dies
 
+-- | Run a supervisor with a given 'Strategy' a 'Mailbox' to control it, and a
+-- list of children to launch. The list can be empty.
 supervisor ::
-       (MonadUnliftIO m, Mailbox mbox)
+       (MonadUnliftIO m, Mailbox mbox (SupervisorMessage n), m ~ n)
     => Strategy
-    -> mbox (SupervisorMessage m)
+    -> mbox (SupervisorMessage n)
     -> [m ()]
     -> m ()
 supervisor strat mbox children = do
@@ -53,9 +60,10 @@ supervisor strat mbox children = do
                 Left x  -> processDead state strat x
         when again $ loop state
     down state = do
-        as <- atomically (readTVar state)
+        as <- readTVarIO state
         mapM_ cancel as
 
+-- | Internal action to wait for a child process to finish running.
 waitForChild :: TVar [Async ()] -> STM (Async (), Either SomeException ())
 waitForChild state = do
     as <- readTVar state
@@ -126,6 +134,7 @@ processDead state (Notify notif) (a, e) = do
             forM_ as (stopChild state)
             throwIO ex
 
+-- | Internal function to start a child process.
 startChild ::
        (MonadUnliftIO m)
     => TVar [Async ()]
@@ -136,6 +145,7 @@ startChild state run = do
     atomically (modifyTVar' state (a:))
     return a
 
+-- | Internal fuction to stop a child process.
 stopChild :: MonadIO m => TVar [Async ()] -> Async () -> m ()
 stopChild state a = do
     isChild <-
@@ -146,22 +156,28 @@ stopChild state a = do
             return (cur /= new)
     when isChild (cancel a)
 
+-- | Add a new child process to the supervisor. The child process will run in
+-- the supervisor context. Will give an 'Async' for the child. This function
+-- will not raise an exception if the child does.
 addChild ::
-       (MonadUnliftIO n, MonadIO m, Mailbox mbox)
+       (MonadUnliftIO n, MonadIO m, Mailbox mbox (SupervisorMessage n))
     => mbox (SupervisorMessage n)
     -> n ()
     -> m (Async ())
 addChild mbox action = AddChild action `query` mbox
 
+-- | Stop a child process controlled by the supervisor. Must pass the 'Async'
+-- for the child. Will not wait for the process to die.
 removeChild ::
-       (MonadUnliftIO n, MonadIO m, Mailbox mbox)
+       (MonadUnliftIO n, MonadIO m, Mailbox mbox (SupervisorMessage n))
     => mbox (SupervisorMessage n)
     -> Async ()
     -> m ()
 removeChild mbox child = RemoveChild child `send` mbox
 
+-- | Stop the supervisor and its children.
 stopSupervisor ::
-       (MonadUnliftIO n, MonadIO m, Mailbox mbox)
+       (MonadUnliftIO n, MonadIO m, Mailbox mbox (SupervisorMessage n))
     => mbox (SupervisorMessage n)
     -> m ()
 stopSupervisor mbox = StopSupervisor `send` mbox

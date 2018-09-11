@@ -18,11 +18,11 @@ dependencies:
   - unliftio
 library:
   source-dirs: src
-  exposed-modules:
-    - Control.Concurrent.NQE
   dependencies:
     - containers
+    - hashable
     - mtl
+    - unique
 tests:
   nqe-test:
     main: Spec.hs

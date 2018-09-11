@@ -1,20 +1,20 @@
+{-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 import           Conduit
-import           Control.Concurrent     hiding (yield)
-import           Control.Concurrent.NQE
 import           Control.Concurrent.STM (retry)
 import           Control.Exception
 import           Control.Monad
-import           Control.Monad.Catch
 import           Data.ByteString        (ByteString)
 import           Data.Conduit.Text      (decode, encode, utf8)
 import qualified Data.Conduit.Text      as CT
 import           Data.Conduit.TMChan
 import           Data.Text              (Text)
+import           NQE
 import           Test.Hspec
 import           UnliftIO
+import           UnliftIO.Concurrent    hiding (yield)
 
 data Pong = Pong deriving (Eq, Show)
 newtype Ping = Ping (Pong -> STM ())
@@ -59,12 +59,10 @@ pongServer ::
     -> IO a
 pongServer source sink go = do
     mbox <- newTQueueIO
-    withAsync (action mbox) go
+    withAsync (in_pipe mbox) $ const $ withAsync (out_pipe mbox) go
   where
-    action mbox =
-        withSource src mbox . const . runConduit $ processor mbox .| snk
-    src = source .| decoder
-    snk = encoder .| sink
+    in_pipe mbox = runConduit $ source .| decoder .| conduitMailbox mbox
+    out_pipe mbox = runConduit $ processor mbox .| encoder .| sink
     processor mbox =
         forever $
         receive mbox >>= \case
@@ -76,16 +74,12 @@ pongClient :: ConduitT () ByteString IO ()
            -> IO Text
 pongClient source sink = do
     mbox <- newTQueueIO
-    withAsync (action mbox) go
+    withAsync out_pipe $
+        const $ withAsync (in_pipe mbox) $ const $ receive mbox
   where
-    action mbox =
-        withSource src mbox $ const $ processor mbox
-    go = wait
-    src = source .| decoder
-    snk = encoder .| sink
-    processor mbox = do
-        runConduit $ yield ("ping\n" :: Text) .| snk
-        receive mbox
+    in_pipe mbox = runConduit $ source .| decoder .| conduitMailbox mbox
+    out_pipe = runConduit $ generator .| encoder .| sink
+    generator = yield ("ping\n" :: Text)
 
 main :: IO ()
 main =
@@ -163,7 +157,7 @@ main =
                                 case fromException x of
                                     Just TestError1 -> True
                                     Just TestError2 -> True
-                                    _ -> False
+                                    _               -> False
                 snd t1 `shouldSatisfy` er
                 snd t2 `shouldSatisfy` er
                 stopSupervisor sup
@@ -171,11 +165,12 @@ main =
         describe "pubsub" $ do
             it "sends messages to all subscribers" $ do
                 let msgs = words "hello world"
-                pub <- newTQueueIO
+                pub <- newTQueueIO >>= newInbox
                 events <- newTQueueIO
-                withAsync (publisher pub events) $ \_ ->
-                    withPubSub pub $ \sub1 ->
-                        withPubSub pub $ \sub2 -> do
+                withAsync (publisher pub (receiveSTM events)) $
+                    const $
+                    withPubSub pub newTQueueIO $ \sub1 ->
+                        withPubSub pub newTQueueIO $ \sub2 -> do
                             mapM_ (`send` events) msgs
                             sub1msgs <- replicateM 2 (receive sub1)
                             sub2msgs <- replicateM 2 (receive sub2)
@@ -183,14 +178,15 @@ main =
                             sub2msgs `shouldBe` msgs
             it "drops messages when bounded queue full" $ do
                 let msgs = words "hello world drop"
-                pub <- newTQueueIO
+                pub <- newTQueueIO >>= newInbox
                 events <- newTQueueIO
-                withAsync (boundedPublisher pub events) $ \_ ->
-                    withBoundedPubSub 2 pub $ \sub -> do
+                withAsync (publisher pub (receiveSTM events)) $
+                    const $
+                    withPubSub pub (newTBQueueIO 2) $ \sub -> do
                         mapM_ (`send` events) msgs
                         atomically $
-                            isFullTBQueue sub >>= \full -> when (not full) retry
-                        msgs <- replicateM 2 (receive sub)
+                            mailboxFullSTM sub >>= \full -> unless full retry
+                        msgs' <- replicateM 2 (receive sub)
                         "meh" `send` events
                         msg <- receive sub
-                        msgs <> [msg] `shouldBe` (words "hello world meh")
+                        msgs' <> [msg] `shouldBe` words "hello world meh"
