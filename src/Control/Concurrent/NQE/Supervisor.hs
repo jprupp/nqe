@@ -157,8 +157,8 @@ stopChild state a = do
     when isChild (cancel a)
 
 -- | Add a new child process to the supervisor. The child process will run in
--- the supervisor context. Will give an 'Async' for the child. This function
--- will not raise an exception if the child does.
+-- the supervisor context. Will return an 'Async' for the child. This function
+-- will not block or raise an exception if the child dies.
 addChild ::
        (MonadUnliftIO n, MonadIO m, Mailbox mbox (SupervisorMessage n))
     => mbox (SupervisorMessage n)
@@ -166,8 +166,8 @@ addChild ::
     -> m (Async ())
 addChild mbox action = AddChild action `query` mbox
 
--- | Stop a child process controlled by the supervisor. Must pass the 'Async'
--- for the child. Will not wait for the process to die.
+-- | Stop a child process controlled by the supervisor. Must pass the child
+-- 'Async'. Will not wait for the child to die.
 removeChild ::
        (MonadUnliftIO n, MonadIO m, Mailbox mbox (SupervisorMessage n))
     => mbox (SupervisorMessage n)
