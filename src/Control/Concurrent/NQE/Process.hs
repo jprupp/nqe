@@ -29,18 +29,13 @@ type Listen a = a -> STM ()
 
 -- | Mailboxes are used to communicate with processes (actors). A process will
 -- usually listen in a loop for events entering its mailbox. A process is its
--- mailbox, so type aliases or wrappers can be created around a mailbox named
--- after the process.
+-- mailbox, so it may be named as the process that it communicates with.
 --
 -- >>> :m + Control.Monad NQE UnliftIO
--- >>> data RegistryMessage = Reg String
--- >>> type Registry = TQueue RegistryMessage
--- >>> registry <- newTQueueIO :: IO Registry
--- >>> let reg r u = Reg u `send` r
--- >>> let run m = receive m >>= \(Reg u) -> putStrLn $ "Registered: " ++ u
--- >>> withAsync (run registry) $ \a -> registry `reg` "Bruce Wayne" >> wait a
+-- >>> registry <- newTQueueIO :: IO (TQueue String)
+-- >>> let run = receive registry >>= putStrLn . ("Registered: " ++)
+-- >>> withAsync run $ \a -> "Bruce Wayne" `send` registry >> wait a
 -- Registered: Bruce Wayne
---
 class Eq (mbox msg) => Mailbox mbox msg where
     -- | STM action that responds true if the mailbox is empty. Useful to avoid
     -- blocking on an empty mailbox.
@@ -114,10 +109,11 @@ receive mbox = receiveMatch mbox Just
 --
 -- Example:
 --
+-- >>> :m + NQE UnliftIO
 -- >>> data Message = Square Integer (Reply Integer)
--- >>> let proc mbox = receive mbox >>= \(Square i r) -> atomically $ r (i * i)
 -- >>> doubler <- newTQueueIO :: IO (TQueue Message)
--- >>> withAsync (proc doubler) $ \_ -> Square 2 `query` doubler
+-- >>> let proc = receive doubler >>= \(Square i r) -> atomically $ r (i * i)
+-- >>> withAsync proc $ \_ -> Square 2 `query` doubler
 -- 4
 --
 -- In this example the @Square@ constructor takes a 'Reply' action as its last
