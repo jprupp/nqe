@@ -3,7 +3,8 @@
 {-# LANGUAGE GADTs                     #-}
 {-# LANGUAGE MultiParamTypeClasses     #-}
 module Control.Concurrent.NQE.Supervisor
-    ( Strategy(..)
+    ( SupervisorMessage
+    , Strategy(..)
     , supervisor
     , addChild
     , removeChild
@@ -41,7 +42,7 @@ supervisor ::
        (MonadUnliftIO m, Mailbox mbox (SupervisorMessage n), m ~ n)
     => Strategy
     -> mbox (SupervisorMessage n)
-    -> [m ()]
+    -> [n ()]
     -> m ()
 supervisor strat mbox children = do
     state <- newTVarIO []

@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 module Control.Concurrent.NQE.PubSub
-    ( publisher
+    ( Publisher
+    , publisher
     , subscribe
     , unsubscribe
     , withPubSub
