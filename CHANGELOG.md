@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 ### Added
 - `Inbox` type is now comparable for equality.
 - Haddock documentation for all functions, types and classes.
+- Expose `SupervisorMessage` type alias.
+- Expose `Publisher` type alias.
 
 ### Changed
 - Change `Mailbox` typeclass.
