@@ -166,12 +166,11 @@ main =
             it "sends messages to all subscribers" $ do
                 let msgs = words "hello world"
                 pub <- newTQueueIO >>= newInbox
-                events <- newTQueueIO
-                withAsync (publisher pub (receiveSTM events)) $
+                withAsync (publisher pub) $
                     const $
-                    withPubSub pub newTQueueIO $ \sub1 ->
-                        withPubSub pub newTQueueIO $ \sub2 -> do
-                            mapM_ (`send` events) msgs
+                    withPubSub Nothing pub $ \sub1 ->
+                        withPubSub Nothing pub $ \sub2 -> do
+                            mapM_ ((`send` pub) . Event) msgs
                             sub1msgs <- replicateM 2 (receive sub1)
                             sub2msgs <- replicateM 2 (receive sub2)
                             sub1msgs `shouldBe` msgs
@@ -179,15 +178,14 @@ main =
             it "drops messages when bounded queue full" $ do
                 let msgs = words "hello world drop"
                 pub <- newTQueueIO >>= newInbox
-                events <- newTQueueIO
-                withAsync (publisher pub (receiveSTM events)) $
+                withAsync (publisher pub) $
                     const $
-                    withPubSub pub (newTBQueueIO 2) $ \sub -> do
-                        mapM_ (`send` events) msgs
+                    withPubSub (Just 2) pub $ \sub -> do
+                        mapM_ ((`send` pub) . Event) msgs
                         atomically $ do
                             check =<< mailboxFullSTM sub
-                            check =<< mailboxEmptySTM events
+                            check =<< mailboxEmptySTM pub
                         msgs' <- replicateM 2 (receive sub)
-                        "meh" `send` events
+                        Event "meh" `send` pub
                         msg <- receive sub
                         msgs' <> [msg] `shouldBe` words "hello world meh"
