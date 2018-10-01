@@ -26,7 +26,7 @@ type ChildStopped = (Child, Either SomeException ())
 
 -- | A supervisor will start, stop and monitor processes.
 data SupervisorMessage
-    = AddChild (IO ())
+    = AddChild ChildAction
                (Reply Child)
     | RemoveChild (Async ())
     | StopSupervisor
