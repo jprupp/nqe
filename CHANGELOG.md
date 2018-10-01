@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 ## 0.6.0
 ### Changed
 - Simplify `Publisher` API.
+- Simplify `Supervisor` API.
 
 ## 0.5.0
 ### Added

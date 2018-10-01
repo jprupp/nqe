@@ -2,8 +2,10 @@
 {-# LANGUAGE FlexibleContexts          #-}
 {-# LANGUAGE GADTs                     #-}
 {-# LANGUAGE MultiParamTypeClasses     #-}
+{-# LANGUAGE Rank2Types                #-}
 module Control.Concurrent.NQE.Supervisor
-    ( SupervisorMessage
+    ( Supervisor
+    , SupervisorMessage
     , Strategy(..)
     , supervisor
     , addChild
@@ -17,17 +19,21 @@ import           Control.Monad
 import           Control.Monad.STM              (catchSTM)
 import           UnliftIO
 
+type Supervisor = Inbox SupervisorMessage
+type Child = Async ()
+type ChildAction = IO ()
+type ChildStopped = (Child, Either SomeException ())
+
 -- | A supervisor will start, stop and monitor processes.
-data SupervisorMessage n
-    = MonadUnliftIO n =>
-      AddChild (n ())
-               (Reply (Async ()))
+data SupervisorMessage
+    = AddChild (IO ())
+               (Reply Child)
     | RemoveChild (Async ())
     | StopSupervisor
 
 -- | Supervisor strategies to decide what to do when a child stops.
 data Strategy
-    = Notify ((Async (), Either SomeException ()) -> STM ())
+    = Notify (Listen ChildStopped)
     -- ^ run this 'STM' action when a process stops
     | KillAll
     -- ^ kill all processes and propagate exception
@@ -38,12 +44,7 @@ data Strategy
 
 -- | Run a supervisor with a given 'Strategy' a 'Mailbox' to control it, and a
 -- list of children to launch. The list can be empty.
-supervisor ::
-       (MonadUnliftIO m, Mailbox mbox (SupervisorMessage n), m ~ n)
-    => Strategy
-    -> mbox (SupervisorMessage n)
-    -> [n ()]
-    -> m ()
+supervisor :: Strategy -> Supervisor -> [ChildAction] -> IO ()
 supervisor strat mbox children = do
     state <- newTVarIO []
     finally (go state) (down state)
@@ -70,11 +71,7 @@ waitForChild state = do
     as <- readTVar state
     waitAnyCatchSTM as
 
-processMessage ::
-       (MonadUnliftIO m)
-    => TVar [Async ()]
-    -> SupervisorMessage m
-    -> m Bool
+processMessage :: TVar [Child] -> SupervisorMessage -> IO Bool
 processMessage state (AddChild ch r) = do
     a <- async ch
     atomically $ do
@@ -92,12 +89,7 @@ processMessage state StopSupervisor = do
     forM_ as (stopChild state)
     return False
 
-processDead ::
-       (MonadIO m)
-    => TVar [Async ()]
-    -> Strategy
-    -> (Async (), Either SomeException ())
-    -> m Bool
+processDead :: TVar [Child] -> Strategy -> ChildStopped -> IO Bool
 processDead state IgnoreAll (a, _) = do
     atomically (modifyTVar' state (filter (/= a)))
     return True
@@ -136,18 +128,14 @@ processDead state (Notify notif) (a, e) = do
             throwIO ex
 
 -- | Internal function to start a child process.
-startChild ::
-       (MonadUnliftIO m)
-    => TVar [Async ()]
-    -> m ()
-    -> m (Async ())
+startChild :: TVar [Child] -> ChildAction -> IO (Async ())
 startChild state run = do
-    a <- async run
+    a <- liftIO $ async run
     atomically (modifyTVar' state (a:))
     return a
 
 -- | Internal fuction to stop a child process.
-stopChild :: MonadIO m => TVar [Async ()] -> Async () -> m ()
+stopChild :: TVar [Child] -> Child -> IO ()
 stopChild state a = do
     isChild <-
         atomically $ do
@@ -160,25 +148,14 @@ stopChild state a = do
 -- | Add a new child process to the supervisor. The child process will run in
 -- the supervisor context. Will return an 'Async' for the child. This function
 -- will not block or raise an exception if the child dies.
-addChild ::
-       (MonadUnliftIO n, MonadIO m, Mailbox mbox (SupervisorMessage n))
-    => mbox (SupervisorMessage n)
-    -> n ()
-    -> m (Async ())
+addChild :: MonadIO m => Supervisor -> ChildAction -> m Child
 addChild mbox action = AddChild action `query` mbox
 
 -- | Stop a child process controlled by the supervisor. Must pass the child
 -- 'Async'. Will not wait for the child to die.
-removeChild ::
-       (MonadUnliftIO n, MonadIO m, Mailbox mbox (SupervisorMessage n))
-    => mbox (SupervisorMessage n)
-    -> Async ()
-    -> m ()
+removeChild :: MonadIO m => Supervisor -> Child -> m ()
 removeChild mbox child = RemoveChild child `send` mbox
 
 -- | Stop the supervisor and its children.
-stopSupervisor ::
-       (MonadUnliftIO n, MonadIO m, Mailbox mbox (SupervisorMessage n))
-    => mbox (SupervisorMessage n)
-    -> m ()
+stopSupervisor :: MonadIO m => Supervisor -> m ()
 stopSupervisor mbox = StopSupervisor `send` mbox

@@ -107,12 +107,12 @@ main =
                 p2 = query id
             it "all processes end without failure" $ do
                 mbox <- newTQueueIO
-                sup <- newTQueueIO
+                sup <- newInbox =<< newTQueueIO
                 g <- async $ supervisor KillAll sup [p1 mbox, p2 mbox]
                 wait g `shouldReturn` ()
             it "one process crashes" $ do
                 mbox <- newTQueueIO
-                sup <- newTQueueIO
+                sup <- newInbox =<< newTQueueIO
                 g <-
                     async $
                     supervisor
@@ -121,7 +121,7 @@ main =
                         [p1 mbox, p2 mbox >> throw TestError1]
                 wait g `shouldThrow` (== TestError1)
             it "both processes crash" $ do
-                sup <- newTQueueIO
+                sup <- newInbox =<< newTQueueIO
                 g <-
                     async $
                     supervisor
@@ -130,7 +130,7 @@ main =
                         [throw TestError1, throw TestError2]
                 wait g `shouldThrow` (\e -> e == TestError1 || e == TestError2)
             it "process crashes ignored" $ do
-                sup <- newTQueueIO
+                sup <- newInbox =<< newTQueueIO
                 g <-
                     async $
                     supervisor
@@ -140,7 +140,7 @@ main =
                 stopSupervisor sup
                 wait g `shouldReturn` ()
             it "monitors processes" $ do
-                sup <- newTQueueIO
+                sup <- newInbox =<< newTQueueIO
                 mon <- newTQueueIO
                 g <-
                     async $
