@@ -5,6 +5,9 @@
 {-# LANGUAGE Rank2Types                #-}
 module Control.Concurrent.NQE.Supervisor
     ( Supervisor
+    , Child
+    , ChildAction
+    , ChildStopped
     , SupervisorMessage
     , Strategy(..)
     , supervisor
