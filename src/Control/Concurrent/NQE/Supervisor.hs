@@ -28,7 +28,7 @@ type ChildStopped = (Child, Either SomeException ())
 data SupervisorMessage
     = AddChild ChildAction
                (Reply Child)
-    | RemoveChild (Async ())
+    | RemoveChild (Child)
     | StopSupervisor
 
 -- | Supervisor strategies to decide what to do when a child stops.
