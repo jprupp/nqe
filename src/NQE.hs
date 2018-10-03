@@ -1,11 +1,8 @@
 module NQE
-    ( module Control.Concurrent.NQE.Process
-    , module Control.Concurrent.NQE.Supervisor
-    , module Control.Concurrent.NQE.PubSub
-    , module Control.Concurrent.NQE.Conduit
+    ( module X
     ) where
 
-import           Control.Concurrent.NQE.Conduit
-import           Control.Concurrent.NQE.Process
-import           Control.Concurrent.NQE.PubSub
-import           Control.Concurrent.NQE.Supervisor
+import           Control.Concurrent.NQE.Conduit    as X
+import           Control.Concurrent.NQE.Process    as X
+import           Control.Concurrent.NQE.Publisher  as X
+import           Control.Concurrent.NQE.Supervisor as X

@@ -1,16 +1,15 @@
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes            #-}
-module Control.Concurrent.NQE.Conduit
-    ( conduitMailbox
-    ) where
+module Control.Concurrent.NQE.Conduit where
 
-import           Control.Concurrent.NQE.Process
 import           Conduit
+import           Control.Concurrent.NQE.Process
+import           Data.Typeable
 
--- | Consumes messages and sends them to a mailbox.
+-- | Consumes messages from a 'Conduit' and sends them to a mailbox.
 conduitMailbox ::
-       (MonadIO m, Mailbox mbox msg)
-    => mbox msg
+       (MonadIO m, OutChan mbox, Typeable msg)
+    => mbox
     -> ConduitT msg o m ()
 conduitMailbox mbox = awaitForever (`send` mbox)
