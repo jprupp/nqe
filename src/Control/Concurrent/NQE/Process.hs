@@ -149,6 +149,9 @@ dispatch ::
     -> m ()
 dispatch md mbox ds = join $ atomically (dispatchSTM md mbox ds)
 
+-- | Dispatch incoming message according to its type as an STM function. If
+-- message cannot be dispatched, discard or return default action if one is
+-- provided.
 dispatchSTM ::
        (Applicative m, InChan mbox)
     => Maybe (Dynamic -> m ())
@@ -164,9 +167,8 @@ dispatchSTM md mbox ds = receiveDynSTM mbox >>= go ds
             Nothing -> go xs msg
 
 -- | Send request to mailbox and wait for a response. Provide a function that
--- takes an empty 'TMVar' and produces a request that is sent to the mailbox.
--- The remote process should fulfill the 'TMVar'. At this point this function
--- will return its contents.
+-- takes an 'Reply' action and produces a request. The remote process should
+-- fulfill the action, and at this point this function will return the response.
 query ::
        (MonadIO m, Typeable request, OutChan mbox)
     => (Reply response -> request)
@@ -206,12 +208,41 @@ query30 ::
     -> m (Maybe response)
 query30 = queryS 30
 
--- | Test all the messages in a mailbox against the supplied function and return
--- the matching message. Will block until a match is found. Messages that do not
+-- | Test all messages in a mailbox against the supplied function and return the
+-- matching message. Will block until a match is found. Messages that do not
 -- match remain in the mailbox.
 receiveMatch ::
        (MonadIO m, Typeable msg, InChan mbox) => mbox -> (msg -> Maybe a) -> m a
 receiveMatch mbox = atomically . receiveMatchSTM mbox
+
+-- | Like 'receiveMatch' but with a timeout set at @u@ microseconds. Returns
+-- 'Nothing' if timeout is reached.
+receiveMatchU ::
+       (MonadUnliftIO m, Typeable msg, InChan mbox)
+    => Int
+    -> mbox
+    -> (msg -> Maybe a)
+    -> m (Maybe a)
+receiveMatchU u mbox f = timeout u $ receiveMatch mbox f
+
+-- | Like 'receiveMatch' but with a timeout set at @u@ seconds. Returns
+-- 'Nothing' if timeout is reached.
+receiveMatchS ::
+       (MonadUnliftIO m, Typeable msg, InChan mbox)
+    => Int
+    -> mbox
+    -> (msg -> Maybe a)
+    -> m (Maybe a)
+receiveMatchS s mbox f = timeout s $ receiveMatch mbox f
+
+-- | Like 'receiveMatch' but with a timeout set at 30 seconds. Returns
+-- 'Nothing' if timeout is reached.
+receiveMatch30 ::
+       (MonadUnliftIO m, Typeable msg, InChan mbox)
+    => mbox
+    -> (msg -> Maybe a)
+    -> m (Maybe a)
+receiveMatch30 mbox f = timeout (30 * 1000 * 1000) $ receiveMatch mbox f
 
 -- | Match a message in the mailbox as an atomic STM action.
 receiveMatchSTM ::
@@ -234,16 +265,20 @@ mailboxEmpty = atomically . mailboxEmptySTM
 requeueListSTM :: InChan mbox => [Dynamic] -> mbox -> STM ()
 requeueListSTM xs mbox = mapM_ (`requeueDynSTM` mbox) xs
 
--- | Run a process in the background.
+-- | Run a process in the background. Stop the background process once the associated
+-- action returns. Background process thread is linked using 'link'.
 withProcess :: MonadUnliftIO m => (Inbox -> m ()) -> (Process -> m a) -> m a
 withProcess p f = do
     (i, m) <- newMailbox
-    withAsync (p i) (\a -> f (Process a m))
+    withAsync (p i) (\a -> link a >> f (Process a m))
 
+-- | Run a process in the background and return the 'Process' handle. Background
+-- process thread is linked using 'link'.
 process :: MonadUnliftIO m => (Inbox -> m ()) -> m Process
 process p = do
     (i, m) <- newMailbox
     a <- async $ p i
+    link a
     return (Process a m)
 
 newMailbox :: MonadUnliftIO m => m (Inbox, Mailbox)

@@ -16,7 +16,7 @@ data PublisherMessage
 
 -- | Publisher process wrapper.
 newtype Publisher = Publisher Process
-    deriving (Eq, Hashable, Typeable, OutChan)
+    deriving (Eq, Hashable, OutChan)
 
 -- | Subscribe a 'Mailbox' to a 'Publisher' generating events.
 subscribe :: MonadIO m => Publisher -> Mailbox -> m ()
@@ -41,6 +41,7 @@ publisherProcess pub = newTVarIO [] >>= runReaderT go
   where
     go = forever $ dispatch (Just forwardEvent) pub [Dispatch processControl]
 
+-- | Internal function to dispatch a received control message.
 processControl ::
        (MonadIO m, MonadReader (TVar [Mailbox]) m) => PublisherMessage -> m ()
 processControl (Subscribe sub) =
@@ -49,6 +50,7 @@ processControl (Subscribe sub) =
 processControl (Unsubscribe sub) =
     ask >>= \box -> atomically (modifyTVar box (delete sub))
 
+-- | Internal function to forward events to all subscribed mailboxes.
 forwardEvent :: (MonadIO m, MonadReader (TVar [Mailbox]) m) => Dynamic -> m ()
 forwardEvent event =
     ask >>= \box ->

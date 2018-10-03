@@ -2,14 +2,14 @@
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 import           Conduit
-import           Control.Concurrent.STM (check)
-import           Control.Exception
+import           Control.Concurrent.STM   (check)
 import           Control.Monad
 import           Data.Dynamic
 import           NQE
 import           Test.Hspec
 import           UnliftIO
-import           UnliftIO.Concurrent    hiding (yield)
+import           UnliftIO.Async
+import           UnliftIO.Concurrent      hiding (yield)
 
 data Pong = Pong deriving (Eq, Show)
 newtype Ping = Ping (Reply Pong)
@@ -35,27 +35,36 @@ main =
                 g <- withProcess pongServer (query Ping)
                 g `shouldBe` Pong
         describe "supervisor" $ do
-            let dummy = threadDelay $ 250 * 1000
-            it "all processes end without failure" .
-                withSupervisor KillAll [dummy, dummy] $ \(Supervisor sup) ->
-                wait (getProcessAsync sup) `shouldReturn` ()
-            it "one process crashes" .
-                withSupervisor IgnoreGraceful [dummy, throw TestError1] $ \(Supervisor sup) ->
-                wait (getProcessAsync sup) `shouldThrow` (== TestError1)
-            it "both processes crash" .
-                withSupervisor
-                    IgnoreGraceful
-                    [throw TestError1, throw TestError2] $ \(Supervisor sup) ->
-                wait (getProcessAsync sup) `shouldThrow`
-                (\e -> e == TestError1 || e == TestError2)
+            let dummy = threadDelay $ 1000 * 1000
+            it "all processes end without failure" $ do
+                let action =
+                        withSupervisor KillAll $ \sup -> do
+                            addChild sup dummy
+                            addChild sup dummy
+                            threadDelay $ 100 * 1000
+                action `shouldReturn` ()
+            it "one process crashes" $ do
+                let action =
+                        withSupervisor IgnoreGraceful $ \sup -> do
+                            addChild sup dummy
+                            addChild sup (throwIO TestError1)
+                            threadDelay $ 500 * 1000
+                action `shouldThrow` anyException
+            it "both processes crash" $ do
+                let action =
+                        withSupervisor IgnoreGraceful $ \sup -> do
+                            addChild sup (throwIO TestError1)
+                            addChild sup (throwIO TestError2)
+                            threadDelay $ 500 * 1000
+                action `shouldThrow` anyException
             it "monitors processes" $ do
-                let rcv i = receiveSTM i :: STM SupervisorNotif
+                let rcv i = receive i :: IO SupervisorNotif
                 (inbox, mailbox) <- newMailbox
                 (t1, t2) <-
-                    withSupervisor
-                        (Notify mailbox)
-                        [throw TestError1, throw TestError2] $ \_ ->
-                        atomically $ (,) <$> rcv inbox <*> rcv inbox
+                    withSupervisor (Notify mailbox) $ \sup -> do
+                        addChild sup (throwIO TestError1)
+                        addChild sup (throwIO TestError2)
+                        (,) <$> rcv inbox <*> rcv inbox
                 let er (ChildStopped _ e) =
                         case e of
                             Nothing -> False
@@ -63,7 +72,7 @@ main =
                                 case fromException x of
                                     Just TestError1 -> True
                                     Just TestError2 -> True
-                                    _ -> False
+                                    _               -> False
                 t1 `shouldSatisfy` er
                 t2 `shouldSatisfy` er
         describe "pubsub" $ do

@@ -13,16 +13,20 @@ import           Data.Hashable
 import           Data.List
 import           UnliftIO
 
+-- | Alias for child action to be executed asynchronously by supervisor.
 type ChildAction = IO ()
+
+-- | Thread handler for child.
 type Child = Async ()
 
+-- | Send this message to a supervisor to add or remove a child.
 data SupervisorMessage
     = AddChild !ChildAction
                !(Reply Child)
     | RemoveChild !Child
                   !(Reply ())
-    deriving (Typeable)
 
+-- | Supervisor notifications sent when a process dies.
 data SupervisorNotif = ChildStopped
     { childStopped   :: !Child
     , childException :: !(Maybe SomeException)
@@ -32,7 +36,7 @@ instance Show SupervisorNotif where
     show (ChildStopped _ e) = show e
 
 newtype Supervisor = Supervisor Process
-    deriving (Eq, Hashable, Typeable, OutChan)
+    deriving (Eq, Hashable, OutChan)
 
 -- | Supervisor strategies to decide what to do when a child stops.
 data Strategy
@@ -45,38 +49,30 @@ data Strategy
     | IgnoreAll
     -- ^ keep running if a child dies and ignore it
 
--- | Run a supervisor with a given 'Strategy' and a list of 'ChildAction' to run
--- as children. Supervisor will be stopped along with all its children when
--- provided action ends.
+-- | Run a supervisor with a given 'Strategy'. Supervisor will be stopped along
+-- with all its children when function on last argument finishes.
 withSupervisor ::
        MonadUnliftIO m
     => Strategy
-    -> [ChildAction]
     -> (Supervisor -> m a)
     -> m a
-withSupervisor strat cs f =
-    withProcess (supervisorProcess strat cs) $ f . Supervisor
+withSupervisor strat f =
+    withProcess (supervisorProcess strat) $ f . Supervisor
 
--- | Run a supervisor with a given 'Strategy' and a list of 'ChildAction' to run
--- as children.
-supervisor :: MonadUnliftIO m => Strategy -> [ChildAction] -> m Supervisor
-supervisor strat cs = Supervisor <$> process (supervisorProcess strat cs)
+-- | Run a supervisor with a given 'Strategy'.
+supervisor :: MonadUnliftIO m => Strategy -> m Supervisor
+supervisor strat = Supervisor <$> process (supervisorProcess strat)
 
--- | Run a supervisor with a given 'Strategy' and a list of 'ChildAction' to
--- run.
+-- | Run a supervisor with a given 'Strategy'.
 supervisorProcess ::
        MonadUnliftIO m
     => Strategy
-    -> [ChildAction]
     -> Inbox
     -> m ()
-supervisorProcess strat cs i = do
+supervisorProcess strat i = do
     state <- newTVarIO []
-    finally (go state) (down state)
+    finally (loop state) (stopAll state)
   where
-    go state = do
-        mapM_ (startChild state) cs
-        loop state
     loop state = do
         e <- atomically $ Right <$> receiveSTM i <|> Left <$> waitForChild state
         again <-
@@ -84,28 +80,28 @@ supervisorProcess strat cs i = do
                 Right m -> processMessage state m
                 Left x  -> processDead state strat x
         when again $ loop state
-    down state = do
-        ps <- readTVarIO state
-        mapM_ cancel ps
 
--- | Internal action to wait for a child process to finish running.
+stopAll :: MonadUnliftIO m => TVar [Child] -> m ()
+stopAll state = mask_ $ do
+    as <- readTVarIO state
+    mapM_ cancel as
+
+-- | Internal function to wait for a child process to finish running.
 waitForChild :: TVar [Child] -> STM (Child, Either SomeException ())
 waitForChild state = do
     as <- readTVar state
     waitAnyCatchSTM as
 
+-- | Internal function to process incoming supervisor message.
 processMessage ::
        MonadUnliftIO m => TVar [Child] -> SupervisorMessage -> m Bool
 processMessage state (AddChild ch r) = do
-    a <- liftIO (async ch)
-    atomically $ do
-        modifyTVar' state (a :)
-        r a
+    a <- startChild state ch
+    atomically $ r a
     return True
 
 processMessage state (RemoveChild a r) = do
-    atomically (modifyTVar' state (filter (/= a)))
-    cancel a
+    stopChild state a
     atomically $ r ()
     return True
 
@@ -121,13 +117,10 @@ processDead state IgnoreAll (a, _) = do
     return True
 
 processDead state KillAll (a, e) = do
-    as <-
-        atomically $ do
-            modifyTVar' state . filter $ (/= a)
-            readTVar state
-    mapM_ (stopChild state) as
+    atomically $ modifyTVar' state . filter $ (/= a)
+    stopAll state
     case e of
-        Left x   -> throwIO x
+        Left x -> throwIO x
         Right () -> return False
 
 processDead state IgnoreGraceful (a, Right ()) = do
@@ -135,11 +128,8 @@ processDead state IgnoreGraceful (a, Right ()) = do
     return True
 
 processDead state IgnoreGraceful (a, Left e) = do
-    as <-
-        atomically $ do
-            modifyTVar' state (filter (/= a))
-            readTVar state
-    mapM_ (stopChild state) as
+    atomically $ modifyTVar' state (filter (/= a))
+    stopAll state
     throwIO e
 
 processDead state (Notify notif) (a, ee) = do
@@ -158,14 +148,14 @@ processDead state (Notify notif) (a, ee) = do
 
 -- | Internal function to start a child process.
 startChild :: MonadUnliftIO m => TVar [Child] -> ChildAction -> m Child
-startChild state ch = do
+startChild state ch = mask_ $ do
     a <- liftIO $ async ch
     atomically $ modifyTVar' state (a :)
     return a
 
 -- | Internal fuction to stop a child process.
 stopChild :: MonadUnliftIO m => TVar [Child] -> Child -> m ()
-stopChild state a = do
+stopChild state a = mask_ $ do
     isChild <-
         atomically $ do
             cur <- readTVar state
@@ -174,12 +164,13 @@ stopChild state a = do
             return (cur /= new)
     when isChild $ cancel a
 
--- | Add a new 'ChildAction' to the supervisor. Will return a 'Process' for the
--- child. This function will not block or raise an exception if the child dies.
+-- | Add a new 'ChildAction' to the supervisor. Will return the 'Child' child
+-- that was just started. This function will not block or raise an exception if
+-- the child dies.
 addChild :: MonadIO m => Supervisor -> ChildAction -> m Child
 addChild sup action = AddChild action `query` sup
 
--- | Stop a child process controlled by the supervisor. Must pass the child
+-- | Stop a 'Child' controlled by this supervisor. Must pass the child
 -- 'Process'. Will block until the child dies.
 removeChild :: MonadIO m => Supervisor -> Child -> m ()
 removeChild sup c = RemoveChild c `query` sup
