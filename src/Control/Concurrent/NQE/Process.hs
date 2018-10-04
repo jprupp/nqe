@@ -164,7 +164,7 @@ queryS ::
     -> (Listen response -> request)
     -> mbox request
     -> m (Maybe response)
-queryS s f m = timeout s (query f m)
+queryS s f m = timeout (s * 1000 * 1000) (query f m)
 
 -- | Do a 'query' but timeout after 30 seconds. Return 'Nothing' if
 -- timeout reached.
