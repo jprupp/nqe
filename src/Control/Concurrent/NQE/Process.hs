@@ -21,6 +21,13 @@ data Mailbox =
                  Mailbox !mbox
                          !Unique
 
+instance Exception TimeoutError
+
+-- | Timed out request.
+data TimeoutError
+    = TimeoutError
+    deriving (Show, Eq)
+
 -- | Function for sorting dispatchers for different types of incoming message.
 data Dispatch m =
     forall msg. (Typeable msg) => Dispatch { getDispatcher :: msg -> m () }
@@ -216,6 +223,12 @@ query30 ::
     -> m (Maybe response)
 query30 = queryS 30
 
+-- | Do a 'query', return the response or timeout after 30 seconds throwing a
+-- 'TimeoutError'.
+queryT :: (MonadUnliftIO m, Typeable request, OutChan mbox) => (Reply response -> request)
+    -> mbox -> m response
+queryT request mbox = request `query30` mbox >>= maybe (throwIO TimeoutError) return
+
 -- | Test all messages in a mailbox against the supplied function and return the
 -- matching message. Will block until a match is found. Messages that do not
 -- match remain in the mailbox.
@@ -251,6 +264,16 @@ receiveMatch30 ::
     -> (msg -> Maybe a)
     -> m (Maybe a)
 receiveMatch30 mbox f = timeout (30 * 1000 * 1000) $ receiveMatch mbox f
+
+-- | Like 'receiveMatch30' but throw a 'TimeoutError' if timeout reached.
+receiveMatchT ::
+       (MonadUnliftIO m, Typeable msg, InChan mbox)
+    => mbox
+    -> (msg -> Maybe a)
+    -> m a
+receiveMatchT mbox f =
+    timeout (30 * 1000 * 1000) (receiveMatch mbox f) >>=
+    maybe (throwIO TimeoutError) return
 
 -- | Match a message in the mailbox as an atomic STM action.
 receiveMatchSTM ::
