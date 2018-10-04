@@ -32,6 +32,7 @@ tests:
       - -rtsopts
       - -with-rtsopts=-N
     dependencies:
+      - async
       - bytestring
       - conduit-extra
       - exceptions

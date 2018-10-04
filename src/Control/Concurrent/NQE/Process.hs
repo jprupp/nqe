@@ -114,8 +114,16 @@ inboxToMailbox :: Inbox -> Mailbox
 inboxToMailbox (Inbox m u) = Mailbox m u
 
 -- | Wrap a bi-directional channel in an 'Inbox'.
-newInbox :: (MonadIO m, InChan mbox, OutChan mbox) => mbox -> m Inbox
-newInbox mbox = Inbox mbox <$> liftIO newUnique
+wrapChannel :: (MonadIO m, InChan mbox, OutChan mbox) => mbox -> m Inbox
+wrapChannel mbox = Inbox mbox <$> liftIO newUnique
+
+-- | Create an unbounded 'Inbox'.
+newInbox :: MonadIO m => m Inbox
+newInbox = newTQueueIO >>= \c -> wrapChannel (c :: TQueue Dynamic)
+
+-- | Create a new 'Inbox' that can only store a maximum number of messages.
+newBoundedInbox :: MonadIO m => Int -> m Inbox
+newBoundedInbox i = newTBQueueIO i >>= \c -> wrapChannel (c :: TBQueue Dynamic)
 
 -- | Send a message to a 'Mailbox'.
 send :: (MonadIO m, Typeable msg, OutChan mbox) => msg -> mbox -> m ()
@@ -283,7 +291,6 @@ process p = do
 
 newMailbox :: MonadUnliftIO m => m (Inbox, Mailbox)
 newMailbox = do
-    q <- newTQueueIO
-    i <- newInbox (q :: TQueue Dynamic)
+    i <- newInbox
     let m = inboxToMailbox i
     return (i, m)

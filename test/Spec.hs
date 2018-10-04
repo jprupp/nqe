@@ -2,13 +2,12 @@
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 import           Conduit
+import           Control.Concurrent.Async (ExceptionInLinkedThread (..))
 import           Control.Concurrent.STM   (check)
 import           Control.Monad
-import           Data.Dynamic
 import           NQE
 import           Test.Hspec
 import           UnliftIO
-import           UnliftIO.Async
 import           UnliftIO.Concurrent      hiding (yield)
 
 data Pong = Pong deriving (Eq, Show)
@@ -17,9 +16,20 @@ newtype Ping = Ping (Reply Pong)
 data TestError
     = TestError1
     | TestError2
-    | TestError3
     deriving (Show, Eq)
 instance Exception TestError
+
+testError :: Selector TestError
+testError = const True
+
+testError1 :: Selector TestError
+testError1 e = e == TestError1
+
+threadError :: Exception e => Selector e -> Selector ExceptionInLinkedThread
+threadError e (ExceptionInLinkedThread _ s) = maybe False e (fromException s)
+
+notifError :: Exception e => Selector e -> Selector SupervisorNotif
+notifError e (ChildStopped _ s) = maybe False e (s >>= fromException)
 
 pongServer :: MonadIO m => Inbox -> m ()
 pongServer mbox =
@@ -49,14 +59,14 @@ main =
                             addChild sup dummy
                             addChild sup (throwIO TestError1)
                             threadDelay $ 500 * 1000
-                action `shouldThrow` anyException
+                action `shouldThrow` threadError testError1
             it "both processes crash" $ do
                 let action =
                         withSupervisor IgnoreGraceful $ \sup -> do
                             addChild sup (throwIO TestError1)
                             addChild sup (throwIO TestError2)
                             threadDelay $ 500 * 1000
-                action `shouldThrow` anyException
+                action `shouldThrow` threadError testError
             it "monitors processes" $ do
                 let rcv i = receive i :: IO SupervisorNotif
                 (inbox, mailbox) <- newMailbox
@@ -65,16 +75,8 @@ main =
                         addChild sup (throwIO TestError1)
                         addChild sup (throwIO TestError2)
                         (,) <$> rcv inbox <*> rcv inbox
-                let er (ChildStopped _ e) =
-                        case e of
-                            Nothing -> False
-                            Just x ->
-                                case fromException x of
-                                    Just TestError1 -> True
-                                    Just TestError2 -> True
-                                    _               -> False
-                t1 `shouldSatisfy` er
-                t2 `shouldSatisfy` er
+                t1 `shouldSatisfy` notifError testError
+                t2 `shouldSatisfy` notifError testError
         describe "pubsub" $ do
             it "sends messages to all subscribers" $ do
                 let msgs = words "hello world"
@@ -94,9 +96,7 @@ main =
                 let msgs = words "hello world drop"
                 msgs' <-
                     withPublisher $ \pub -> do
-                        inbox <-
-                            newTBQueueIO 2 >>= \m ->
-                                newInbox (m :: TBQueue Dynamic)
+                        inbox <- newBoundedInbox 2
                         subscribe pub (inboxToMailbox inbox)
                         mapM_ (`send` pub) msgs
                         atomically $ check =<< mailboxFullSTM inbox
