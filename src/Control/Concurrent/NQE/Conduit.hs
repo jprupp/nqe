@@ -10,6 +10,6 @@ import           Data.Typeable
 -- | Consumes messages from a 'Conduit' and sends them to a mailbox.
 conduitMailbox ::
        (MonadIO m, OutChan mbox, Typeable msg)
-    => mbox
+    => mbox msg
     -> ConduitT msg o m ()
 conduitMailbox mbox = awaitForever (`send` mbox)

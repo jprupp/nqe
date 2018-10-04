@@ -1,7 +1,6 @@
 {-# LANGUAGE ExistentialQuantification  #-}
 {-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE GADTs                      #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE Rank2Types                 #-}
 module Control.Concurrent.NQE.Supervisor where
@@ -9,7 +8,6 @@ module Control.Concurrent.NQE.Supervisor where
 import           Control.Applicative
 import           Control.Concurrent.NQE.Process
 import           Control.Monad
-import           Data.Hashable
 import           Data.List
 import           UnliftIO
 
@@ -22,9 +20,9 @@ type Child = Async ()
 -- | Send this message to a supervisor to add or remove a child.
 data SupervisorMessage
     = AddChild !ChildAction
-               !(Reply Child)
+               !(Listen Child)
     | RemoveChild !Child
-                  !(Reply ())
+                  !(Listen ())
 
 -- | Supervisor notifications sent when a process dies.
 data SupervisorNotif = ChildStopped
@@ -32,15 +30,11 @@ data SupervisorNotif = ChildStopped
     , childException :: !(Maybe SomeException)
     }
 
-instance Show SupervisorNotif where
-    show (ChildStopped _ e) = show e
-
-newtype Supervisor = Supervisor Process
-    deriving (Eq, Hashable, OutChan)
+type Supervisor = Process SupervisorMessage
 
 -- | Supervisor strategies to decide what to do when a child stops.
 data Strategy
-    = Notify Mailbox
+    = Notify (Listen (Child, Maybe SomeException))
     -- ^ send a 'SupervisorNotif' to 'Mailbox' when child dies
     | KillAll
     -- ^ kill all processes and propagate exception upstream
@@ -56,18 +50,17 @@ withSupervisor ::
     => Strategy
     -> (Supervisor -> m a)
     -> m a
-withSupervisor strat f =
-    withProcess (supervisorProcess strat) $ f . Supervisor
+withSupervisor = withProcess . supervisorProcess
 
 -- | Run a supervisor with a given 'Strategy'.
 supervisor :: MonadUnliftIO m => Strategy -> m Supervisor
-supervisor strat = Supervisor <$> process (supervisorProcess strat)
+supervisor strat = process (supervisorProcess strat)
 
 -- | Run a supervisor with a given 'Strategy'.
 supervisorProcess ::
        MonadUnliftIO m
     => Strategy
-    -> Inbox
+    -> Inbox SupervisorMessage
     -> m ()
 supervisorProcess strat i = do
     state <- newTVarIO []
@@ -135,10 +128,10 @@ processDead state IgnoreGraceful (a, Left e) = do
 processDead state (Notify notif) (a, ee) = do
     atomically $ do
         as <- readTVar state
-        modifyTVar state (filter (/= a))
         case find (== a) as of
-            Just p  -> ChildStopped p me `sendSTM` notif
+            Just p  -> notif (p, me)
             Nothing -> return ()
+        modifyTVar state (filter (/= a))
     return True
   where
     me =
