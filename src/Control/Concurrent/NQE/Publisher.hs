@@ -28,16 +28,26 @@ data PublisherMessage msg
 -- | Publisher process wrapper.
 type Publisher msg = Process (PublisherMessage msg)
 
--- | Subscribe a 'Mailbox' to a 'Publisher' generating events.
+-- | Create a mailbox and subscribe to a publisher. End subscription when
+-- associated action ends.
+withSubscription ::
+       MonadUnliftIO m => Publisher msg -> (Inbox msg -> m a) -> m a
+withSubscription pub f = do
+    inbox <- newInbox
+    let sub = subscribe pub (`sendSTM` inbox)
+        unsub = unsubscribe pub
+    bracket sub unsub $ \_ -> f inbox
+
+-- | 'Listen' to a 'Publisher' generating events.
 subscribe :: MonadIO m => Publisher msg -> Listen msg -> m (Subscriber msg)
 subscribe pub sub = Subscribe sub `query` pub
 
--- | Unsubscribe an 'Inbox' from a 'Publisher' events.
+-- | Unsubscribe from a 'Publisher' events.
 unsubscribe :: MonadIO m => Publisher msg -> Subscriber msg -> m ()
 unsubscribe pub sub = Unsubscribe sub `send` pub
 
 -- | Launch a 'Publisher'. The publisher will be stopped when the associated
--- action stops.
+-- action ends.
 withPublisher :: MonadUnliftIO m => (Publisher msg -> m a) -> m a
 withPublisher = withProcess publisherProcess
 
