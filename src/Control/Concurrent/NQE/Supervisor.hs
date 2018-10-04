@@ -24,12 +24,6 @@ data SupervisorMessage
     | RemoveChild !Child
                   !(Listen ())
 
--- | Supervisor notifications sent when a process dies.
-data SupervisorNotif = ChildStopped
-    { childStopped   :: !Child
-    , childException :: !(Maybe SomeException)
-    }
-
 type Supervisor = Process SupervisorMessage
 
 -- | Supervisor strategies to decide what to do when a child stops.
