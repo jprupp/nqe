@@ -206,7 +206,7 @@ receiveMatchS ::
     -> mbox msg
     -> (msg -> Maybe a)
     -> m (Maybe a)
-receiveMatchS s mbox f = timeout s $ receiveMatch mbox f
+receiveMatchS s mbox f = timeout (s * 1000 * 1000) $ receiveMatch mbox f
 
 -- | Like 'receiveMatch' but with a timeout set at 30 seconds. Returns
 -- 'Nothing' if timeout is reached.
