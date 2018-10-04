@@ -6,8 +6,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## 0.6.0
 ### Changed
-- Overhaul all APIs in a non-backwards-compatible manner.
-- Use dynamic data types for all mailboxes.
+- Overhaul all APIs.
 
 ## 0.5.0
 ### Added
