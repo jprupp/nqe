@@ -3,7 +3,33 @@
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE Rank2Types                 #-}
-module Control.Concurrent.NQE.Supervisor where
+{-|
+Module      : Control.Concurrent.NQE.Supervisor
+Copyright   : No rights reserved
+License     : UNLICENSE
+Maintainer  : xenog@protonmail.com
+Stability   : experimental
+Portability : POSIX
+
+Supervisors run and monitor processes, including other supervisors. A supervisor
+has a corresponding 'Strategy' that controls its behaviour if a child stops.
+Supervisors deal with exceptions in concurrent processes so that their code does
+not need to be written in an overly-defensive style. They help prevent problems
+caused by processes dying quietly in the background, potentially locking an
+entire application.
+-}
+module Control.Concurrent.NQE.Supervisor
+    ( ChildAction
+    , Child
+    , SupervisorMessage
+    , Supervisor
+    , Strategy(..)
+    , withSupervisor
+    , supervisor
+    , supervisorProcess
+    , addChild
+    , removeChild
+    ) where
 
 import           Control.Applicative
 import           Control.Concurrent.NQE.Process
@@ -24,6 +50,7 @@ data SupervisorMessage
     | RemoveChild !Child
                   !(Listen ())
 
+-- | Alias for supervisor process.
 type Supervisor = Process SupervisorMessage
 
 -- | Supervisor strategies to decide what to do when a child stops.
@@ -37,8 +64,9 @@ data Strategy
     | IgnoreAll
     -- ^ keep running if a child dies and ignore it
 
--- | Run a supervisor with a given 'Strategy'. Supervisor will be stopped along
--- with all its children when function on last argument finishes.
+-- | Run a supervisor asynchronously and pass its mailbox to a function.
+-- Supervisor will be stopped along with all its children when the function
+-- ends.
 withSupervisor ::
        MonadUnliftIO m
     => Strategy
@@ -46,11 +74,11 @@ withSupervisor ::
     -> m a
 withSupervisor = withProcess . supervisorProcess
 
--- | Run a supervisor with a given 'Strategy'.
+-- | Run a supervisor as an asynchronous process.
 supervisor :: MonadUnliftIO m => Strategy -> m Supervisor
 supervisor strat = process (supervisorProcess strat)
 
--- | Run a supervisor with a given 'Strategy'.
+-- | Run a supervisor in the current thread.
 supervisorProcess ::
        MonadUnliftIO m
     => Strategy
@@ -68,6 +96,18 @@ supervisorProcess strat i = do
                 Left x  -> processDead state strat x
         when again $ loop state
 
+-- | Add a new 'ChildAction' to the supervisor. Will return the 'Child' that was
+-- just started. This function will not block or raise an exception if the child
+-- dies.
+addChild :: MonadIO m => Supervisor -> ChildAction -> m Child
+addChild sup action = AddChild action `query` sup
+
+-- | Stop a 'Child' controlled by this supervisor. Will block until the child
+-- dies.
+removeChild :: MonadIO m => Supervisor -> Child -> m ()
+removeChild sup c = RemoveChild c `query` sup
+
+-- | Internal function to stop all children.
 stopAll :: MonadUnliftIO m => TVar [Child] -> m ()
 stopAll state = mask_ $ do
     as <- readTVarIO state
@@ -86,7 +126,6 @@ processMessage state (AddChild ch r) = do
     a <- startChild state ch
     atomically $ r a
     return True
-
 processMessage state (RemoveChild a r) = do
     stopChild state a
     atomically $ r ()
@@ -102,23 +141,19 @@ processDead ::
 processDead state IgnoreAll (a, _) = do
     atomically . modifyTVar' state $ filter (/= a)
     return True
-
 processDead state KillAll (a, e) = do
     atomically $ modifyTVar' state . filter $ (/= a)
     stopAll state
     case e of
         Left x -> throwIO x
         Right () -> return False
-
 processDead state IgnoreGraceful (a, Right ()) = do
     atomically (modifyTVar' state (filter (/= a)))
     return True
-
 processDead state IgnoreGraceful (a, Left e) = do
     atomically $ modifyTVar' state (filter (/= a))
     stopAll state
     throwIO e
-
 processDead state (Notify notif) (a, ee) = do
     atomically $ do
         as <- readTVar state
@@ -150,14 +185,3 @@ stopChild state a = mask_ $ do
             writeTVar state new
             return (cur /= new)
     when isChild $ cancel a
-
--- | Add a new 'ChildAction' to the supervisor. Will return the 'Child' child
--- that was just started. This function will not block or raise an exception if
--- the child dies.
-addChild :: MonadIO m => Supervisor -> ChildAction -> m Child
-addChild sup action = AddChild action `query` sup
-
--- | Stop a 'Child' controlled by this supervisor. Must pass the child
--- 'Process'. Will block until the child dies.
-removeChild :: MonadIO m => Supervisor -> Child -> m ()
-removeChild sup c = RemoveChild c `query` sup

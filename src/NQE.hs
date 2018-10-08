@@ -1,8 +1,25 @@
+{-|
+Module      : NQE
+Copyright   : No rights reserved
+License     : UNLICENSE
+Maintainer  : xenog@protonmail.com
+Stability   : experimental
+Portability : POSIX
+
+Concurrency library inspired by Erlang/OTP.
+-}
 module NQE
-    ( module X
+    ( -- * Processes and Mailboxes
+      module Process
+      -- * Process Supervisors
+    , module Supervisor
+      -- * Publisher and Subscribers
+    , module Publisher
+      -- * Conduit Integration
+    , module Conduit
     ) where
 
-import           Control.Concurrent.NQE.Conduit    as X
-import           Control.Concurrent.NQE.Process    as X
-import           Control.Concurrent.NQE.Publisher  as X
-import           Control.Concurrent.NQE.Supervisor as X
+import           Control.Concurrent.NQE.Conduit    as Conduit
+import           Control.Concurrent.NQE.Process    as Process
+import           Control.Concurrent.NQE.Publisher  as Publisher
+import           Control.Concurrent.NQE.Supervisor as Supervisor

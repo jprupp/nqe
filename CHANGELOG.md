@@ -6,7 +6,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## 0.6.0
 ### Changed
-- Overhaul all APIs.
+- Overhaul entire API in a non-backwards-compatible way.
+- Separate read/write from write-only mailbox types.
+- Improve documentation.
 
 ## 0.5.0
 ### Added

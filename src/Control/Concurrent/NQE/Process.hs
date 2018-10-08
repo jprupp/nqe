@@ -3,6 +3,22 @@
 {-# LANGUAGE FlexibleInstances         #-}
 {-# LANGUAGE MultiParamTypeClasses     #-}
 {-# LANGUAGE RankNTypes                #-}
+{-|
+Module      : Control.Concurrent.NQE.Process
+Copyright   : No rights reserved
+License     : UNLICENSE
+Maintainer  : xenog@protonmail.com
+Stability   : experimental
+Portability : POSIX
+
+This is the core of the NQE library. It is composed of code to deal with
+processes and mailboxes. Processes represent concurrent threads that receive
+messages via a mailbox, also referred to as a channel. NQE is inspired by
+Erlang/OTP and it stands for “Not Quite Erlang”. A process is analogous to an
+actor in Scala, or an object in the original (Alan Kay) sense of the word. To
+implement synchronous communication NQE makes use of 'STM' actions embedded in
+asynchronous messages.
+-}
 module Control.Concurrent.NQE.Process where
 
 import           Control.Concurrent.Unique
@@ -13,20 +29,13 @@ import           UnliftIO
 -- | 'STM' function that receives an event and does something with it.
 type Listen a = a -> STM ()
 
--- | Mailbox view that only allows to send messages.
+-- | Channel that only allows messages to be sent to it.
 data Mailbox msg =
     forall mbox. (OutChan mbox) =>
                  Mailbox !(mbox msg)
                          !Unique
 
-instance Exception TimeoutError
-
--- | Timed out request.
-data TimeoutError
-    = TimeoutError
-    deriving (Show, Eq)
-
--- | Mailbox for a process allowing sending and receiving messages.
+-- | Channel that allows to send or receive messages.
 data Inbox msg =
     forall mbox. (OutChan mbox, InChan mbox) =>
                  Inbox !(mbox msg)
@@ -42,26 +51,26 @@ instance Eq (Inbox msg) where
       where
         f (Inbox _ u) = u
 
--- | Thread asynchronous handle and its mailbox.
+-- | 'Async' handle and 'Mailbox' for a process.
 data Process msg = Process
     { getProcessAsync   :: Async ()
     , getProcessMailbox :: Mailbox msg
     } deriving Eq
 
--- | Class for channels that can be used to build mailboxes.
+-- | Class for implementation of an 'Inbox'.
 class InChan mbox where
-    -- | Are there pending messages?
+    -- | Are there messages queued?
     mailboxEmptySTM :: mbox msg -> STM Bool
-    -- | Receive a message from mailbox in an 'STM' transaction.
+    -- | Receive a message.
     receiveSTM :: mbox msg -> STM msg
-    -- | Re-enqueue a message in the mailbox such that it is the next element to
-    -- be retrieved.
+    -- | Put a message in the mailbox such that it is received next.
     requeueSTM :: msg -> mbox msg -> STM ()
 
+-- | Class for implementation of a 'Mailbox'.
 class OutChan mbox where
-    -- | Is this bounded mailbox full?
+    -- | Is this bounded channel full? Always 'False' for unbounded channels.
     mailboxFullSTM :: mbox msg -> STM Bool
-    -- | Send a 'Dynamic' to the mailbox in an 'STM' transaction.
+    -- | Send a message to this channel.
     sendSTM :: msg -> mbox msg -> STM ()
 
 instance InChan TQueue where
@@ -107,11 +116,11 @@ instance Hashable (Mailbox msg) where
     hashWithSalt i (Mailbox _ u) = hashWithSalt i u
     hash (Mailbox _ u) = hash u
 
--- | Remove read capabilities from an 'Inbox' to get a write-only 'Mailbox'.
+-- | Get a send-only 'Mailbox' for an 'Inbox'.
 inboxToMailbox :: Inbox msg -> Mailbox msg
 inboxToMailbox (Inbox m u) = Mailbox m u
 
--- | Wrap a bi-directional channel in an 'Inbox'.
+-- | Wrap a channel in an 'Inbox'
 wrapChannel ::
        (MonadIO m, InChan mbox, OutChan mbox) => mbox msg -> m (Inbox msg)
 wrapChannel mbox = Inbox mbox <$> liftIO newUnique
@@ -120,22 +129,20 @@ wrapChannel mbox = Inbox mbox <$> liftIO newUnique
 newInbox :: MonadIO m => m (Inbox msg)
 newInbox = newTQueueIO >>= \c -> wrapChannel c
 
--- | Create a new 'Inbox' that can only store a maximum number of messages.
+-- | 'Inbox' with upper bound on number of allowed queued messages.
 newBoundedInbox :: MonadIO m => Int -> m (Inbox msg)
 newBoundedInbox i = newTBQueueIO i >>= \c -> wrapChannel c
 
--- | Send a message to a 'Mailbox'.
+-- | Send a message to a channel.
 send :: (MonadIO m, OutChan mbox) => msg -> mbox msg -> m ()
 send msg = atomically . sendSTM msg
 
--- | Receive a message from a 'Mailbox'. Will block until a message of the right
--- type appears. Any message of the wrong type will remain in the mailbox.
+-- | Receive a message from a channel.
 receive :: (InChan mbox, MonadIO m) => mbox msg -> m msg
 receive mbox = receiveMatch mbox Just
 
--- | Send request to mailbox and wait for a response. Provide a function that
--- takes an 'Listen' action and produces a request. The remote process should
--- fulfill the action, and at this point this function will return the response.
+-- | Send request to channel and wait for a response. The @request@ 'STM' action
+-- will be created by this function.
 query ::
        (MonadIO m, OutChan mbox)
     => (Listen response -> request)
@@ -166,25 +173,9 @@ queryS ::
     -> m (Maybe response)
 queryS s f m = timeout (s * 1000 * 1000) (query f m)
 
--- | Do a 'query' but timeout after 30 seconds. Return 'Nothing' if
--- timeout reached.
-query30 ::
-       (MonadUnliftIO m, OutChan mbox)
-    => (Listen response -> request)
-    -> mbox request
-    -> m (Maybe response)
-query30 = queryS 30
-
--- | Do a 'query', return the response or timeout after 30 seconds throwing a
--- 'TimeoutError'.
-queryT :: (MonadUnliftIO m, OutChan mbox) => (Listen response -> request)
-    -> mbox request -> m response
-queryT request mbox =
-    request `query30` mbox >>= maybe (throwIO TimeoutError) return
-
--- | Test all messages in a mailbox against the supplied function and return the
--- matching message. Will block until a match is found. Messages that do not
--- match remain in the mailbox.
+-- | Test all messages in a channel against the supplied function and return the
+-- first matching message. Will block until a match is found. Messages that do
+-- not match remain in the channel.
 receiveMatch :: (MonadIO m, InChan mbox) => mbox msg -> (msg -> Maybe a) -> m a
 receiveMatch mbox = atomically . receiveMatchSTM mbox
 
@@ -198,7 +189,7 @@ receiveMatchU ::
     -> m (Maybe a)
 receiveMatchU u mbox f = timeout u $ receiveMatch mbox f
 
--- | Like 'receiveMatch' but with a timeout set at @u@ seconds. Returns
+-- | Like 'receiveMatch' but with a timeout set at @s@ seconds. Returns
 -- 'Nothing' if timeout is reached.
 receiveMatchS ::
        (MonadUnliftIO m, InChan mbox)
@@ -208,23 +199,7 @@ receiveMatchS ::
     -> m (Maybe a)
 receiveMatchS s mbox f = timeout (s * 1000 * 1000) $ receiveMatch mbox f
 
--- | Like 'receiveMatch' but with a timeout set at 30 seconds. Returns
--- 'Nothing' if timeout is reached.
-receiveMatch30 ::
-       (MonadUnliftIO m, InChan mbox)
-    => mbox msg
-    -> (msg -> Maybe a)
-    -> m (Maybe a)
-receiveMatch30 mbox f = timeout (30 * 1000 * 1000) $ receiveMatch mbox f
-
--- | Like 'receiveMatch30' but throw a 'TimeoutError' if timeout reached.
-receiveMatchT ::
-       (MonadUnliftIO m, InChan mbox) => mbox msg -> (msg -> Maybe a) -> m a
-receiveMatchT mbox f =
-    timeout (30 * 1000 * 1000) (receiveMatch mbox f) >>=
-    maybe (throwIO TimeoutError) return
-
--- | Match a message in the mailbox as an atomic STM action.
+-- | Match a message in the channel as an atomic 'STM' action.
 receiveMatchSTM :: InChan mbox => mbox msg -> (msg -> Maybe a) -> STM a
 receiveMatchSTM mbox f = go []
   where
@@ -236,16 +211,18 @@ receiveMatchSTM mbox f = go []
                     return x
                 Nothing -> go (msg : acc)
 
--- | Check if the mailbox is empty.
+-- | Check if the channel is empty.
 mailboxEmpty :: (MonadIO m, InChan mbox) => mbox msg -> m Bool
 mailboxEmpty = atomically . mailboxEmptySTM
 
--- | Put a message at the start of a mailbox, so that it is the next one read.
+-- | Put a list of messages at the start of a channel, so that the last element
+-- of the list is the next message to be received.
 requeueListSTM :: InChan mbox => [msg] -> mbox msg -> STM ()
 requeueListSTM xs mbox = mapM_ (`requeueSTM` mbox) xs
 
--- | Run a process in the background. Stop the background process once the associated
--- action returns. Background process thread is linked using 'link'.
+-- | Run a process in the background and pass it to a function. Stop the
+-- background process once the function returns. Background process exceptions
+-- are rethrown in the current thread.
 withProcess ::
        MonadUnliftIO m => (Inbox msg -> m ()) -> (Process msg -> m a) -> m a
 withProcess p f = do
@@ -253,7 +230,7 @@ withProcess p f = do
     withAsync (p i) (\a -> link a >> f (Process a m))
 
 -- | Run a process in the background and return the 'Process' handle. Background
--- process thread is linked using 'link'.
+-- process exceptions are rethrown in the current thread.
 process :: MonadUnliftIO m => (Inbox msg -> m ()) -> m (Process msg)
 process p = do
     (i, m) <- newMailbox
@@ -261,6 +238,7 @@ process p = do
     link a
     return (Process a m)
 
+-- | Create an unbounded inbox and corresponding mailbox.
 newMailbox :: MonadUnliftIO m => m (Inbox msg, Mailbox msg)
 newMailbox = do
     i <- newInbox
