@@ -1,5 +1,5 @@
 name: nqe
-version: 0.6.0
+version: 0.6.1
 synopsis: Concurrency library in the style of Erlang/OTP
 description: 'Minimalistic actor library inspired by Erlang/OTP with support for supervisor hierarchies and asynchronous messages, as well as abstractions for synchronous communication and easy management of TCP connections.'
 category: Control
@@ -12,7 +12,7 @@ extra-source-files:
   - README.md
   - CHANGELOG.md
 dependencies:
-  - base >=4.7 && <5
+  - base >=4.8 && <5
   - conduit
   - stm
   - unliftio

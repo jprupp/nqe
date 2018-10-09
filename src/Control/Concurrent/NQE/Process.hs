@@ -24,6 +24,7 @@ module Control.Concurrent.NQE.Process where
 import           Control.Concurrent.Unique
 import           Data.Function
 import           Data.Hashable
+import           Numeric.Natural
 import           UnliftIO
 
 -- | 'STM' function that receives an event and does something with it.
@@ -130,8 +131,8 @@ newInbox :: MonadIO m => m (Inbox msg)
 newInbox = newTQueueIO >>= \c -> wrapChannel c
 
 -- | 'Inbox' with upper bound on number of allowed queued messages.
-newBoundedInbox :: MonadIO m => Int -> m (Inbox msg)
-newBoundedInbox i = newTBQueueIO i >>= \c -> wrapChannel c
+newBoundedInbox :: MonadIO m => Natural -> m (Inbox msg)
+newBoundedInbox i = newTBQueueIO (fromIntegral i) >>= \c -> wrapChannel c
 
 -- | Send a message to a channel.
 send :: (MonadIO m, OutChan mbox) => msg -> mbox msg -> m ()
@@ -222,7 +223,7 @@ requeueListSTM xs mbox = mapM_ (`requeueSTM` mbox) xs
 
 -- | Run a process in the background and pass it to a function. Stop the
 -- background process once the function returns. Background process exceptions
--- are rethrown in the current thread.
+-- are re-thrown in the current thread.
 withProcess ::
        MonadUnliftIO m => (Inbox msg -> m ()) -> (Process msg -> m a) -> m a
 withProcess p f = do
@@ -230,7 +231,7 @@ withProcess p f = do
     withAsync (p i) (\a -> link a >> f (Process a m))
 
 -- | Run a process in the background and return the 'Process' handle. Background
--- process exceptions are rethrown in the current thread.
+-- process exceptions are re-thrown in the current thread.
 process :: MonadUnliftIO m => (Inbox msg -> m ()) -> m (Process msg)
 process p = do
     (i, m) <- newMailbox
