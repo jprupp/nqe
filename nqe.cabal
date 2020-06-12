@@ -1,13 +1,13 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.31.2.
+-- This file has been generated from package.yaml by hpack version 0.33.0.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 0e32c083c42a466ecee9a387113fd8e7a9857d7c312a3c3b58fb5bbd423ade1f
+-- hash: 7754aaa97f2f3e89433744c32f9954f25dc83ade6be3af578514cb0eb9631f2a
 
 name:           nqe
-version:        0.6.1
+version:        0.6.2
 synopsis:       Concurrency library in the style of Erlang/OTP
 description:    Minimalistic actor library inspired by Erlang/OTP with support for supervisor hierarchies and asynchronous messages, as well as abstractions for synchronous communication and easy management of TCP connections.
 category:       Control
@@ -15,8 +15,8 @@ homepage:       https://github.com/xenog/nqe#readme
 bug-reports:    https://github.com/xenog/nqe/issues
 author:         Jean-Pierre Rupp
 maintainer:     xenog@protonmail.com
-license:        PublicDomain
-license-file:   UNLICENSE
+license:        MIT
+license-file:   LICENSE
 build-type:     Simple
 extra-source-files:
     README.md

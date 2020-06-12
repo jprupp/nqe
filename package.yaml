@@ -1,12 +1,12 @@
 name: nqe
-version: 0.6.1
+version: 0.6.2
 synopsis: Concurrency library in the style of Erlang/OTP
 description: 'Minimalistic actor library inspired by Erlang/OTP with support for supervisor hierarchies and asynchronous messages, as well as abstractions for synchronous communication and easy management of TCP connections.'
 category: Control
 author: Jean-Pierre Rupp
 maintainer: xenog@protonmail.com
-license: PublicDomain
-license-file: UNLICENSE
+license: MIT
+license-file: LICENSE
 github: xenog/nqe
 extra-source-files:
   - README.md
