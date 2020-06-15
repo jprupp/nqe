@@ -26,6 +26,8 @@ module Control.Concurrent.NQE.Publisher
     , withPublisher
     , publisher
     , publisherProcess
+    , publish
+    , publishSTM
     ) where
 
 import           Control.Concurrent.NQE.Process
@@ -56,6 +58,12 @@ data PublisherMessage msg
 
 -- | Alias for a publisher process.
 type Publisher msg = Process (PublisherMessage msg)
+
+publish :: MonadIO m => msg -> Publisher msg -> m ()
+publish = send . Event
+
+publishSTM :: msg -> Publisher msg -> STM ()
+publishSTM = sendSTM . Event
 
 -- | Create a mailbox, subscribe it to a publisher and pass it to the supplied
 -- function . End subscription when function returns.
