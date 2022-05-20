@@ -1,13 +1,13 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.33.0.
+-- This file has been generated from package.yaml by hpack version 0.34.4.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: b8bfeb3e2d85e7de9f577f583e4e83d00fb5c564b58716c2fdc26e0da0c6ced0
+-- hash: 3792a9b030f7697ae24ef34aef1c83768206ff91344fe288987266195c699f0a
 
 name:           nqe
-version:        0.6.3
+version:        0.6.4
 synopsis:       Concurrency library in the style of Erlang/OTP
 description:    Please see the README on GitHub at <https://github.com/jprupp/nqe#readme>
 category:       Control

@@ -32,6 +32,7 @@ module Control.Concurrent.NQE.Publisher
 
 import           Control.Concurrent.NQE.Process
 import           Control.Concurrent.Unique
+import           Control.Monad
 import           Control.Monad.Reader
 import           Data.Function
 import           Data.Hashable

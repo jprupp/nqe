@@ -1,4 +1,7 @@
-resolver: lts-16.0
+resolver: nightly-2022-05-19
+extra-deps:
+  - mtl-2.3@sha256:9850384335d39f4307bdd8010c61b61cc2adb88adcb6820f8372f4d2f4905a3d,1830
+  - exceptions-0.10.5@sha256:b2c634a95ba2a68e0df3ae67d006f0dabb02edbe4dc77b321133551e308ca047,2832
 nix:
   packages:
     - zlib
