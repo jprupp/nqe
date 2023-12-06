@@ -3,24 +3,10 @@
 # For more information, please see the documentation at:
 #   https://docs.haskellstack.org/en/stable/lock_files
 
-packages:
-- completed:
-    hackage: mtl-2.3@sha256:9850384335d39f4307bdd8010c61b61cc2adb88adcb6820f8372f4d2f4905a3d,1830
-    pantry-tree:
-      size: 1852
-      sha256: 0f60bd67fb750f8ce7471fbf8b88b62b75079270c3dc56b7ed59920e57fa124a
-  original:
-    hackage: mtl-2.3@sha256:9850384335d39f4307bdd8010c61b61cc2adb88adcb6820f8372f4d2f4905a3d,1830
-- completed:
-    hackage: exceptions-0.10.5@sha256:b2c634a95ba2a68e0df3ae67d006f0dabb02edbe4dc77b321133551e308ca047,2832
-    pantry-tree:
-      size: 738
-      sha256: 55b1a4123104e57b5e72b1c5354408807beded8a52ff1900521fed7007812715
-  original:
-    hackage: exceptions-0.10.5@sha256:b2c634a95ba2a68e0df3ae67d006f0dabb02edbe4dc77b321133551e308ca047,2832
+packages: []
 snapshots:
 - completed:
-    size: 583971
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2022/5/19.yaml
-    sha256: 6a12cc403a75d978f6902f1b0d8e564b547f2a1b9ed03fe3871a43a980e04209
-  original: nightly-2022-05-19
+    sha256: d88d143974e013e69643a7ab059635300ec32d865830706e9e960eaf1725e7af
+    size: 708708
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2023/12/6.yaml
+  original: nightly-2023-12-06
