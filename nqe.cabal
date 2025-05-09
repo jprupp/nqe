@@ -1,20 +1,20 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.36.0.
+-- This file has been generated from package.yaml by hpack version 0.38.0.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 294113b7ba7506e5e1487a0172b6daeaa115d1558af30149e09fa01cfdcfe7fc
+-- hash: eccc612cfd9271d97bc20072fbd9bda9b4353231324881cd805cd2cf55df53e1
 
 name:           nqe
-version:        0.6.5
+version:        0.6.6
 synopsis:       Concurrency library in the style of Erlang/OTP
 description:    Please see the README on GitHub at <https://github.com/jprupp/nqe#readme>
 category:       Control
 homepage:       https://github.com/xenog/nqe#readme
 bug-reports:    https://github.com/xenog/nqe/issues
-author:         Jean-Pierre Rupp
-maintainer:     xenog@protonmail.com
+author:         JP Rupp
+maintainer:     jprupp@protonmail.ch
 license:        MIT
 license-file:   LICENSE
 build-type:     Simple

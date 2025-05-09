@@ -1,4 +1,4 @@
-resolver: nightly-2023-12-06
+resolver: lts-23.21
 nix:
   packages:
     - zlib
