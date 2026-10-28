@@ -98,7 +98,10 @@ publisher = process publisherProcess
 publisherProcess :: MonadUnliftIO m => Inbox (PublisherMessage msg) -> m ()
 publisherProcess inbox = newTVarIO [] >>= runReaderT go
   where
-    go = forever $ receive inbox >>= publisherMessage
+    -- Sequenced with (>>=) only: 'forever' uses (*>), which for a monad
+    -- that is only known through its dictionary (LoggingT in particular)
+    -- leaves a continuation frame and two thunks per message, forever.
+    go = receive inbox >>= publisherMessage >>= \_ -> go
 
 -- | Internal function to dispatch a publisher message.
 publisherMessage ::
