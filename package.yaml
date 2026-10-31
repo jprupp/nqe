@@ -1,5 +1,5 @@
 name: nqe
-version: 0.6.6
+version: 0.6.7
 synopsis: Concurrency library in the style of Erlang/OTP
 description: Please see the README on GitHub at <https://github.com/jprupp/nqe#readme>
 category: Control

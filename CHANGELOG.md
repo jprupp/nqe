@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## 0.6.7
+### Changed
+- Use `>>=` explicitly to avoid problems with the LoggingT monad.
+
 ## 0.6.6
 ### Changed
 - Simplify author name.
