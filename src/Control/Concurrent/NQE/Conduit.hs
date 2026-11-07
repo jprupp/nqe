@@ -3,9 +3,9 @@
 {-# LANGUAGE RankNTypes            #-}
 {-|
 Module      : Control.Concurrent.NQE.Conduit
-Copyright   : No rights reserved
-License     : UNLICENSE
-Maintainer  : xenog@protonmail.com
+Copyright   : Haskoin Developers
+License     : MIT
+Maintainer  : jprupp@protonmail.ch
 Stability   : experimental
 Portability : POSIX
 
@@ -18,6 +18,14 @@ import           Control.Concurrent.NQE.Process
 import           Data.Typeable
 
 -- | Consumes messages from a 'Conduit' and sends them to a channel.
+--
+-- Every value received from upstream is sent to the mailbox using 'send'. If
+-- the mailbox is bounded and full, the conduit blocks until there is space,
+-- providing back-pressure to upstream. The conduit finishes when upstream does.
+--
+-- @
+-- runConduit $ sourceHandle h .| conduitMailbox mailbox
+-- @
 conduitMailbox ::
        (MonadIO m, OutChan mbox, Typeable msg)
     => mbox msg

@@ -6,9 +6,9 @@
 
 -- |
 -- Module      : Control.Concurrent.NQE.Supervisor
--- Copyright   : No rights reserved
--- License     : UNLICENSE
--- Maintainer  : xenog@protonmail.com
+-- Copyright   : Haskoin Developers
+-- License     : MIT
+-- Maintainer  : jprupp@protonmail.ch
 -- Stability   : experimental
 -- Portability : POSIX
 --
@@ -18,6 +18,17 @@
 -- not need to be written in an overly-defensive style. They help prevent problems
 -- caused by processes dying quietly in the background, potentially locking an
 -- entire application.
+--
+-- A child is any @IO ()@ action. It is started with 'addChild', which returns
+-- its 'Async' handle, and can be stopped with 'removeChild'. When the supervisor
+-- itself stops, all of its children are cancelled.
+--
+-- @
+-- 'withSupervisor' 'KillAll' $ \\sup -> do
+--     _ <- 'addChild' sup worker1
+--     _ <- 'addChild' sup worker2
+--     mainLoop
+-- @
 module Control.Concurrent.NQE.Supervisor
   ( ChildAction,
     Child,
@@ -39,33 +50,44 @@ import Control.Monad
 import Data.List
 import UnliftIO
 
--- | Alias for child action to be executed asynchronously by supervisor.
+-- | Alias for child action to be executed asynchronously by supervisor. Use
+-- 'UnliftIO.toIO' or 'UnliftIO.withRunInIO' to turn an action in another monad
+-- into a 'ChildAction'.
 type ChildAction = IO ()
 
--- | Thread handler for child.
+-- | Thread handler for child. Returned by 'addChild' and used to remove the
+-- child with 'removeChild', or to identify it in a 'Notify' callback.
 type Child = Async ()
 
--- | Send this message to a supervisor to add or remove a child.
+-- | Send this message to a supervisor to add or remove a child. Normally these
+-- messages are sent using 'addChild' and 'removeChild'.
 data SupervisorMessage
-  = AddChild
+  = -- | start a child and reply with its handle
+    AddChild
       !ChildAction
       !(Listen Child)
-  | RemoveChild
+  | -- | stop a child and reply once it is stopped
+    RemoveChild
       !Child
       !(Listen ())
 
--- | Alias for supervisor process.
+-- | Alias for supervisor process. Since it is a 'Process', it can be stopped by
+-- cancelling 'getProcessAsync', which also cancels all its children.
 type Supervisor = Process SupervisorMessage
 
 -- | Supervisor strategies to decide what to do when a child stops.
 data Strategy
-  = -- | send a 'SupervisorNotif' to 'Mailbox' when child dies
+  = -- | run the 'Listen' action with the child handle and the exception that
+    -- stopped it, or 'Nothing' if it stopped gracefully; then keep running
     Notify (Listen (Child, Maybe SomeException))
-  | -- | kill all processes and propagate exception upstream
+  | -- | if a child stops for any reason, kill all children and stop the
+    -- supervisor; if the child threw an exception, re-throw it from the
+    -- supervisor
     KillAll
-  | -- | ignore processes that stop without raising an exception
+  | -- | ignore children that stop without raising an exception; if a child
+    -- throws, kill all children and re-throw the exception from the supervisor
     IgnoreGraceful
-  | -- | keep running if a child dies and ignore it
+  | -- | keep running if a child dies and ignore it, whatever the reason
     IgnoreAll
 
 -- | Run a supervisor asynchronously and pass its mailbox to a function.
@@ -78,11 +100,15 @@ withSupervisor ::
   m a
 withSupervisor = withProcess . supervisorProcess
 
--- | Run a supervisor as an asynchronous process.
+-- | Run a supervisor as an asynchronous process. The supervisor thread is
+-- linked to the current thread, so exceptions it throws are re-thrown here. It
+-- must be stopped manually; prefer 'withSupervisor' where possible.
 supervisor :: (MonadUnliftIO m) => Strategy -> m Supervisor
 supervisor strat = process (supervisorProcess strat)
 
--- | Run a supervisor in the current thread.
+-- | Run a supervisor in the current thread. Returns when the strategy dictates
+-- that the supervisor should stop. All children are cancelled when this
+-- function exits, whether normally or due to an exception.
 supervisorProcess ::
   (MonadUnliftIO m) =>
   Strategy ->
