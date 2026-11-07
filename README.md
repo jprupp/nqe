@@ -164,7 +164,7 @@ to `stack.yaml`:
 
 ```yaml
 extra-deps:
-  - nqe-0.6.8
+  - nqe-0.6.9
 ```
 
 ## Quick start
