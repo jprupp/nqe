@@ -19,9 +19,12 @@ in any monad with a `MonadUnliftIO` instance, such as `ReaderT` stacks or
 
 ## Contents
 
+- [Why NQE](#why-nqe)
+- [Design principles](#design-principles)
 - [Features](#features)
 - [Installation](#installation)
 - [Quick start](#quick-start)
+- [Tutorial: a counter service](#tutorial-a-counter-service)
 - [Concepts](#concepts)
 - [Usage guide](#usage-guide)
 - [Module overview](#module-overview)
@@ -29,6 +32,55 @@ in any monad with a `MonadUnliftIO` instance, such as `ReaderT` stacks or
 - [Development](#development)
 - [Related projects](#related-projects)
 - [License](#license)
+
+## Why NQE
+
+Most concurrency bugs come from threads sharing mutable state: two threads
+change the same thing, and the result depends on who got there first. Locks
+and transactions help, but as a program grows it becomes hard to know which
+thread may touch what.
+
+Erlang popularised a different discipline. Each piece of state has one owner,
+a *process*. Other code cannot touch that state; it can only send the process
+a message and, if it needs an answer, wait for a reply. The process handles one
+message at a time, so its state is never seen half-changed. Processes are
+grouped under *supervisors* that know what to do when one of them dies, so
+failures are handled in one place instead of in every thread.
+
+Haskell already has the raw materials for this: cheap threads, STM and the
+`async` package. What it lacks is a shared vocabulary. Every project ends up
+writing its own request/reply helpers, its own "run this thread and make sure
+it dies with me", its own broadcast channel. NQE is that vocabulary, kept small
+on purpose. It was written to structure
+[haskoin-node](https://github.com/jprupp/haskoin-node) and
+[haskoin-store](https://github.com/jprupp/haskoin-store), where peers, the
+header chain, the block importer and the cache are all NQE processes.
+
+Use NQE when your program is naturally a set of long-lived components that
+talk to each other: network services, nodes, pipelines, background workers. If
+you only need to run a few things in parallel and collect their results, plain
+`async` is simpler.
+
+## Design principles
+
+- **Ownership over sharing.** A process owns its state. Others hold a
+  `Mailbox`, which can send but not receive, so they cannot interfere with it.
+- **Build on STM, don't hide it.** Channels are STM queues and replies are STM
+  actions. Anything NQE does can be combined with your own transactions.
+- **The caller decides where replies go.** A request carries a callback
+  (`Listen`) instead of a reply channel. `query` points it at a variable and
+  waits, but you could point it at a queue, a counter or a log.
+- **Back-pressure by default where it matters.** Bounded inboxes block fast
+  producers instead of letting queues eat memory.
+- **No silent failures.** Processes are linked to the thread that starts them,
+  and supervisors always cancel their children when they stop.
+- **Scoped lifetimes.** The `with` functions tie a process, supervisor or
+  subscription to a block of code, so it cannot outlive it, even on an
+  exception.
+- **Not quite Erlang.** No distribution, no registry, no hot code reloading and
+  no automatic restarts. Those features add a lot of machinery that most
+  Haskell programs never use. Supervisors report deaths; your code decides
+  whether a restart makes sense.
 
 ## Features
 
@@ -52,9 +104,45 @@ in any monad with a `MonadUnliftIO` instance, such as `ReaderT` stacks or
 ## Installation
 
 NQE is on [Hackage](https://hackage.haskell.org/package/nqe) and in Stackage
-nightly snapshots.
+nightly snapshots. It is pure Haskell, with no C libraries to install, and
+builds with any GHC that current Stackage snapshots support.
 
-### With Cabal
+### Step by step with Stack
+
+1. Install [Stack](https://docs.haskellstack.org/) (`curl -sSL
+   https://get.haskellstack.org/ | sh`, or through your package manager).
+2. Create a project and add the dependencies:
+
+   ```sh
+   stack new nqe-demo simple
+   cd nqe-demo
+   ```
+
+   In `nqe-demo.cabal`, add `nqe` and `unliftio` to `build-depends` of the
+   executable.
+3. Paste the [quick start](#quick-start) program into `src/Main.hs`.
+4. Build and run it:
+
+   ```sh
+   stack run
+   ```
+
+   It prints `Pong`.
+
+### Step by step with Cabal
+
+```sh
+cabal update
+mkdir nqe-demo && cd nqe-demo
+cabal init --non-interactive --exe
+```
+
+Add `nqe` and `unliftio` to `build-depends` in `nqe-demo.cabal`, put the quick
+start program in `app/Main.hs`, and run it with `cabal run`.
+
+### Adding NQE to an existing project
+
+With Cabal, list it in `build-depends`:
 
 ```cabal
 build-depends:
@@ -63,20 +151,20 @@ build-depends:
   , unliftio
 ```
 
-### With Stack
+With Stack and hpack, list it in `package.yaml`:
 
 ```yaml
-# package.yaml
 dependencies:
   - nqe
   - unliftio
 ```
 
-If your resolver does not include NQE, add it to `stack.yaml`:
+If your Stack resolver does not include NQE, or has an older version, add it
+to `stack.yaml`:
 
 ```yaml
 extra-deps:
-  - nqe-0.6.7
+  - nqe-0.6.8
 ```
 
 ## Quick start
@@ -106,6 +194,88 @@ main = withProcess pongServer $ \p -> do
 `withProcess` runs `pongServer` in a new thread, passes its handle to the
 function, and stops the thread when the function returns. If the server throws,
 the exception is re-thrown in `main`.
+
+## Tutorial: a counter service
+
+This walks through building a small service the NQE way. The service keeps a
+count, other threads increment it and read it, and a supervisor makes sure the
+program stops cleanly if anything goes wrong.
+
+### 1. Describe the messages
+
+A process is defined by the messages it understands. Requests that need an
+answer carry a `Listen` callback for the reply:
+
+```haskell
+data CounterMsg
+  = Increment Int              -- fire and forget
+  | GetCount (Listen Int)      -- request with a reply
+```
+
+### 2. Write the process
+
+The process owns its state. Here the state is passed along the loop, so there
+is no shared variable at all:
+
+```haskell
+counter :: Inbox CounterMsg -> IO ()
+counter inbox = go 0
+  where
+    go n =
+      receive inbox >>= \case
+        Increment k -> go (n + k)
+        GetCount reply -> atomically (reply n) >> go n
+```
+
+### 3. Give it a friendly interface
+
+Callers should not need to know about messages. Wrap them in functions that
+take the `Mailbox`, the send-only end:
+
+```haskell
+increment :: Mailbox CounterMsg -> Int -> IO ()
+increment mbox k = send (Increment k) mbox
+
+getCount :: Mailbox CounterMsg -> IO Int
+getCount = query GetCount
+```
+
+### 4. Start it and use it
+
+```haskell
+{-# LANGUAGE LambdaCase #-}
+
+import Control.Monad (replicateM_)
+import NQE
+import UnliftIO
+import UnliftIO.Concurrent (threadDelay)
+
+main :: IO ()
+main = do
+  (inbox, mbox) <- newMailbox
+  withSupervisor IgnoreGraceful $ \sup -> do
+    _ <- addChild sup (counter inbox)
+    _ <- addChild sup (replicateM_ 1000 (increment mbox 1))
+    _ <- addChild sup (replicateM_ 1000 (increment mbox 1))
+    threadDelay 100000
+    getCount mbox >>= print -- 2000
+```
+
+The strategy is the important decision. The two workers are expected to finish,
+so a normal exit must not bring the group down; but if anything crashes,
+including the counter, the rest cannot be trusted, so the whole group should
+stop and the exception should reach `main`. That is exactly `IgnoreGraceful`.
+With `KillAll`, the first worker to finish would stop the counter too, and
+`getCount` would wait forever.
+
+### 5. Where to go from here
+
+- Make the inbox bounded with `newBoundedInbox` if producers could outrun the
+  counter.
+- Publish every change with a `Publisher` so that other components can react
+  to it.
+- Use `queryS 5 GetCount mbox` instead of `query` when the counter might be
+  gone, so callers do not hang.
 
 ## Concepts
 

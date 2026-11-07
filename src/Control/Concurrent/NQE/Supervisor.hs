@@ -19,6 +19,30 @@
 -- caused by processes dying quietly in the background, potentially locking an
 -- entire application.
 --
+-- = Why supervisors
+--
+-- In a program with many threads, the dangerous failure is the quiet one: a
+-- thread dies, nobody notices, and some other thread waits forever for a reply
+-- that will never come. A supervisor makes the life and death of a group of
+-- threads somebody's responsibility. It owns its children, it is told when one
+-- stops, and it applies a policy that you chose up front.
+--
+-- = Design choices
+--
+-- * __No automatic restarts.__ Erlang supervisors restart children. NQE
+--   supervisors only stop, ignore or report them. Restarting correctly needs
+--   knowledge that only your code has, such as which state to start from and
+--   how often a restart is acceptable, so the decision is left to you. 'Notify'
+--   exists so that you can implement any restart policy you like.
+--
+-- * __Children run in 'IO'.__ A supervisor outlives any one of its children and
+--   may run them in contexts unrelated to where they were added, so it cannot
+--   share an arbitrary monadic context with them. Convert with
+--   'UnliftIO.withRunInIO' when adding a child.
+--
+-- * __Stopping is total.__ When a supervisor stops, for whatever reason, all
+--   of its children are cancelled. Nothing it started can leak.
+--
 -- A child is any @IO ()@ action. It is started with 'addChild', which returns
 -- its 'Async' handle, and can be stopped with 'removeChild'. When the supervisor
 -- itself stops, all of its children are cancelled.
@@ -76,6 +100,11 @@ data SupervisorMessage
 type Supervisor = Process SupervisorMessage
 
 -- | Supervisor strategies to decide what to do when a child stops.
+--
+-- Pick the strategy by asking what a dead child means for the rest of the group.
+-- If the group is useless without every child, use 'KillAll'. If children are
+-- jobs that may finish but must not crash, use 'IgnoreGraceful'. If children are
+-- independent, such as one per network connection, use 'IgnoreAll' or 'Notify'.
 data Strategy
   = -- | run the 'Listen' action with the child handle and the exception that
     -- stopped it, or 'Nothing' if it stopped gracefully; then keep running
@@ -129,6 +158,9 @@ supervisorProcess strat i = do
 -- | Add a new 'ChildAction' to the supervisor. Will return the 'Child' that was
 -- just started. This function will not block or raise an exception if the child
 -- dies.
+--
+-- It does not block on the child, so it is safe to call from a child of the same
+-- supervisor, for example to spawn helpers.
 addChild :: (MonadIO m) => Supervisor -> ChildAction -> m Child
 addChild sup action = AddChild action `query` sup
 

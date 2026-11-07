@@ -8,6 +8,12 @@ Portability : POSIX
 
 Concurrency library inspired by Erlang/OTP.
 
+NQE helps you build programs out of many small threads that each own their
+state and talk by passing messages, instead of threads that share mutable
+state. It adds a few well-known patterns on top of 'STM' and @async@:
+mailboxes, request and reply, supervision and publish/subscribe. Each module
+explains why it works the way it does.
+
 This module re-exports everything in the library:
 
 * "Control.Concurrent.NQE.Process": processes, inboxes, mailboxes and

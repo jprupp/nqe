@@ -17,6 +17,31 @@ the publisher will continue calling its 'Listen' action in the future, likely
 causing memory leaks. Prefer 'withSubscription', which unsubscribes
 automatically.
 
+= Why a publisher process
+
+Broadcasting is common: many parts of a program want to hear about the same
+events, such as new blocks or connected peers, and the code producing them
+should not need to know who is listening. A publisher decouples the two. The
+producer sends each event once; subscribers come and go without the producer
+noticing.
+
+= Design choices
+
+* __Subscribers are 'Listen' actions, not inboxes.__ That leaves every policy
+  decision to the subscriber: it can filter events, transform them, drop them
+  when its queue is full, or write them anywhere an 'STM' action can.
+
+* __Delivery is a single transaction.__ Each event is handed to all current
+  subscribers in one 'STM' transaction, so they all see the same events in the
+  same order. The cost is that one slow 'Listen' action slows the whole
+  publisher, which is why those actions must be quick and must not block.
+
+* __The loop is flat.__ The publisher loop sequences with @>>=@ rather than
+  'Control.Monad.forever', so that it runs in constant memory even in monads
+  like @LoggingT@, where @forever@ leaks.
+
+= Example
+
 @
 'withPublisher' $ \\pub ->
     'withSubscription' pub $ \\inbox -> do
@@ -90,6 +115,10 @@ publishSTM = sendSTM . Event
 -- function. End subscription when function returns, even if it throws an
 -- exception. The inbox is unbounded, so the caller should consume messages from
 -- it regularly to avoid unbounded memory growth.
+--
+-- This is the safe way to subscribe, because the subscription cannot outlive
+-- the scope. For a bounded or filtered subscription, write your own bracket
+-- around 'subscribe' and 'unsubscribe' with your own 'Listen' action.
 withSubscription ::
        MonadUnliftIO m => Publisher msg -> (Inbox msg -> m a) -> m a
 withSubscription pub f = do

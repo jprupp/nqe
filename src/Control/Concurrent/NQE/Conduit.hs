@@ -26,6 +26,10 @@ import           Data.Typeable
 -- @
 -- runConduit $ sourceHandle h .| conduitMailbox mailbox
 -- @
+--
+-- This is the bridge between streaming code and processes: a conduit that reads
+-- a socket or a file can feed a process directly, and a bounded mailbox turns the
+-- process's pace into back-pressure on the stream.
 conduitMailbox ::
        (MonadIO m, OutChan mbox, Typeable msg)
     => mbox msg
