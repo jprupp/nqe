@@ -1,5 +1,5 @@
 name: nqe
-version: 0.6.9
+version: 0.7.0
 synopsis: Concurrency library in the style of Erlang/OTP
 description: Please see the README on GitHub at <https://github.com/jprupp/nqe#readme>
 category: Control
@@ -12,16 +12,15 @@ extra-source-files:
   - README.md
   - CHANGELOG.md
 dependencies:
+  - async
   - base >=4.8 && <5
   - conduit
   - stm
-  - unliftio
 library:
   source-dirs: src
   dependencies:
     - containers
     - hashable
-    - mtl
     - unique
 tests:
   nqe-test:
@@ -32,7 +31,6 @@ tests:
       - -rtsopts
       - -with-rtsopts=-N
     dependencies:
-      - async
       - bytestring
       - conduit-extra
       - exceptions

@@ -35,13 +35,25 @@
 --   how often a restart is acceptable, so the decision is left to you. 'Notify'
 --   exists so that you can implement any restart policy you like.
 --
--- * __Children run in 'IO'.__ A supervisor outlives any one of its children and
---   may run them in contexts unrelated to where they were added, so it cannot
---   share an arbitrary monadic context with them. Convert with
---   'UnliftIO.withRunInIO' when adding a child.
+-- * __Children run in 'IO'.__ Like everything else in NQE, a child is a plain
+--   'IO' action. A supervisor outlives any one of its children and runs them
+--   from its own thread, unrelated to where they were added, so there is no
+--   other context that it could share with them.
 --
 -- * __Stopping is total.__ When a supervisor stops, for whatever reason, all
---   of its children are cancelled. Nothing it started can leak.
+--   of its children are cancelled. Nothing it started can leak. It waits for
+--   them with asynchronous exceptions blocked, so that cancelling the
+--   supervisor a second time cannot make it walk away from children that are
+--   still stopping. The price is that a child that refuses to die holds up
+--   its supervisor.
+--
+-- * __A dead child is an error, however it died.__ 'KillAll' and
+--   'IgnoreGraceful' re-throw the exception that stopped a child. An
+--   asynchronous one, such as the t'AsyncCancelled' of a child that somebody
+--   cancelled directly instead of using 'removeChild', is wrapped in
+--   t'AsyncChildException' first. Thrown as it is, it would look as if the
+--   supervisor itself had been cancelled, and 'link' would not report it to
+--   the thread that started the supervisor.
 --
 -- A child is any @IO ()@ action. It is started with 'addChild', which returns
 -- its 'Async' handle, and can be stopped with 'removeChild'. When the supervisor
@@ -59,6 +71,7 @@ module Control.Concurrent.NQE.Supervisor
     SupervisorMessage,
     Supervisor,
     Strategy (..),
+    AsyncChildException (..),
     withSupervisor,
     supervisor,
     supervisorProcess,
@@ -68,15 +81,22 @@ module Control.Concurrent.NQE.Supervisor
 where
 
 import Control.Applicative
+import Control.Concurrent.Async
 import Control.Concurrent.NQE.Process
-import Control.Concurrent.STM (retry)
+import Control.Concurrent.STM
+import Control.Exception
+  ( Exception (..),
+    SomeAsyncException (..),
+    SomeException,
+    finally,
+    mask_,
+    throwIO,
+    uninterruptibleMask_,
+  )
 import Control.Monad
 import Data.List
-import UnliftIO
 
--- | Alias for child action to be executed asynchronously by supervisor. Use
--- 'UnliftIO.toIO' or 'UnliftIO.withRunInIO' to turn an action in another monad
--- into a 'ChildAction'.
+-- | Alias for child action to be executed asynchronously by supervisor.
 type ChildAction = IO ()
 
 -- | Thread handler for child. Returned by 'addChild' and used to remove the
@@ -111,41 +131,63 @@ data Strategy
     Notify (Listen (Child, Maybe SomeException))
   | -- | if a child stops for any reason, kill all children and stop the
     -- supervisor; if the child threw an exception, re-throw it from the
-    -- supervisor
+    -- supervisor (see t'AsyncChildException')
     KillAll
   | -- | ignore children that stop without raising an exception; if a child
     -- throws, kill all children and re-throw the exception from the supervisor
+    -- (see t'AsyncChildException')
     IgnoreGraceful
   | -- | keep running if a child dies and ignore it, whatever the reason
     IgnoreAll
 
+-- | An asynchronous exception that stopped a child, as a supervisor with the
+-- 'KillAll' or 'IgnoreGraceful' strategy re-throws it.
+--
+-- A child can die of an asynchronous exception without the supervisor having
+-- asked for it: somebody cancels its 'Async' handle directly, a thread linked
+-- to it fails, or the runtime sends it a stack overflow. The supervisor
+-- treats that as a failure of the child like any other. It cannot throw the
+-- exception unchanged, because the exception would then be taken for one
+-- aimed at the supervisor: 'link' ignores a linked thread that ends with
+-- t'AsyncCancelled', so the supervisor would stop without anybody noticing,
+-- and handlers that let asynchronous exceptions through would not see an
+-- error either. Wrapped in this type it is an ordinary, synchronous exception
+-- that reaches the thread that started the supervisor.
+--
+-- Exceptions that are not asynchronous are re-thrown unchanged, and 'Notify'
+-- always receives the original exception. The 'Show' instance and
+-- 'displayException' print the exception inside, so logs read as if it had
+-- not been wrapped.
+newtype AsyncChildException = AsyncChildException SomeException
+
+instance Show AsyncChildException where
+  showsPrec p (AsyncChildException e) = showsPrec p e
+
+instance Exception AsyncChildException where
+  displayException (AsyncChildException e) = displayException e
+
 -- | Run a supervisor asynchronously and pass its mailbox to a function.
 -- Supervisor will be stopped along with all its children when the function
 -- ends.
-withSupervisor ::
-  (MonadUnliftIO m) =>
-  Strategy ->
-  (Supervisor -> m a) ->
-  m a
+withSupervisor :: Strategy -> (Supervisor -> IO a) -> IO a
 withSupervisor = withProcess . supervisorProcess
 
 -- | Run a supervisor as an asynchronous process. The supervisor thread is
 -- linked to the current thread, so exceptions it throws are re-thrown here. It
 -- must be stopped manually; prefer 'withSupervisor' where possible.
-supervisor :: (MonadUnliftIO m) => Strategy -> m Supervisor
+supervisor :: Strategy -> IO Supervisor
 supervisor strat = process (supervisorProcess strat)
 
 -- | Run a supervisor in the current thread. Returns when the strategy dictates
 -- that the supervisor should stop. All children are cancelled when this
 -- function exits, whether normally or due to an exception.
-supervisorProcess ::
-  (MonadUnliftIO m) =>
-  Strategy ->
-  Inbox SupervisorMessage ->
-  m ()
+supervisorProcess :: Strategy -> Inbox SupervisorMessage -> IO ()
 supervisorProcess strat i = do
   state <- newTVarIO []
-  finally (loop state) (stopAll state)
+  -- 'finally' from base only masks its clean-up, which lets an asynchronous
+  -- exception in while 'cancel' waits for a child to end. The children are
+  -- stopped uninterruptibly instead, so that none of them is left running.
+  loop state `finally` uninterruptibleMask_ (stopAll state)
   where
     loop state = do
       e <- atomically $ Right <$> receiveSTM i <|> Left <$> waitForChild state
@@ -161,16 +203,16 @@ supervisorProcess strat i = do
 --
 -- It does not block on the child, so it is safe to call from a child of the same
 -- supervisor, for example to spawn helpers.
-addChild :: (MonadIO m) => Supervisor -> ChildAction -> m Child
+addChild :: Supervisor -> ChildAction -> IO Child
 addChild sup action = AddChild action `query` sup
 
 -- | Stop a 'Child' controlled by this supervisor. Will block until the child
 -- dies.
-removeChild :: (MonadIO m) => Supervisor -> Child -> m ()
+removeChild :: Supervisor -> Child -> IO ()
 removeChild sup c = RemoveChild c `query` sup
 
 -- | Internal function to stop all children.
-stopAll :: (MonadUnliftIO m) => TVar [Child] -> m ()
+stopAll :: TVar [Child] -> IO ()
 stopAll state = mask_ $ do
   as <- readTVarIO state
   mapM_ cancel as
@@ -183,8 +225,7 @@ waitForChild state = do
   waitAnyCatchSTM as
 
 -- | Internal function to process incoming supervisor message.
-processMessage ::
-  (MonadUnliftIO m) => TVar [Child] -> SupervisorMessage -> m Bool
+processMessage :: TVar [Child] -> SupervisorMessage -> IO Bool
 processMessage state (AddChild ch r) = do
   a <- startChild state ch
   atomically $ r a
@@ -196,11 +237,10 @@ processMessage state (RemoveChild a r) = do
 
 -- | Internal function to run when a child process dies.
 processDead ::
-  (MonadUnliftIO m) =>
   TVar [Child] ->
   Strategy ->
   (Child, Either SomeException ()) ->
-  m Bool
+  IO Bool
 processDead state IgnoreAll (a, _) = do
   atomically . modifyTVar' state $ filter (/= a)
   return True
@@ -208,7 +248,7 @@ processDead state KillAll (a, e) = do
   atomically $ modifyTVar' state . filter $ (/= a)
   stopAll state
   case e of
-    Left x -> throwIO x
+    Left x -> throwChild x
     Right () -> return False
 processDead state IgnoreGraceful (a, Right ()) = do
   atomically (modifyTVar' state (filter (/= a)))
@@ -216,7 +256,7 @@ processDead state IgnoreGraceful (a, Right ()) = do
 processDead state IgnoreGraceful (a, Left e) = do
   atomically $ modifyTVar' state (filter (/= a))
   stopAll state
-  throwIO e
+  throwChild e
 processDead state (Notify notif) (a, ee) = do
   atomically $ do
     as <- readTVar state
@@ -231,15 +271,25 @@ processDead state (Notify notif) (a, ee) = do
         Left e -> Just e
         Right () -> Nothing
 
+-- | Internal function to re-throw the exception that stopped a child from the
+-- supervisor. An asynchronous exception is wrapped in t'AsyncChildException',
+-- so that it is thrown as a failure of the child and not mistaken for an
+-- exception sent to the supervisor itself.
+throwChild :: SomeException -> IO a
+throwChild e =
+  case fromException e of
+    Just (SomeAsyncException _) -> throwIO (AsyncChildException e)
+    Nothing -> throwIO e
+
 -- | Internal function to start a child process.
-startChild :: (MonadUnliftIO m) => TVar [Child] -> ChildAction -> m Child
+startChild :: TVar [Child] -> ChildAction -> IO Child
 startChild state ch = mask_ $ do
-  a <- liftIO $ async ch
+  a <- async ch
   atomically $ modifyTVar' state (a :)
   return a
 
 -- | Internal fuction to stop a child process.
-stopChild :: (MonadUnliftIO m) => TVar [Child] -> Child -> m ()
+stopChild :: TVar [Child] -> Child -> IO ()
 stopChild state a = mask_ $ do
   isChild <-
     atomically $ do

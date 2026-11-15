@@ -4,6 +4,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## 0.7.0 - 2026-11-15
+### Changed
+- Every function runs in plain `IO` (or `STM`, as before) instead of any
+  `MonadIO` or `MonadUnliftIO` monad. This breaks backwards compatibility.
+  Names and argument orders are the same.
+- `conduitMailbox` is a `ConduitT msg o IO ()`.
+- A supervisor with the `KillAll` or `IgnoreGraceful` strategy re-throws an
+  asynchronous exception that stopped a child wrapped in the new
+  `AsyncChildException`. It used to be wrapped in `SyncExceptionWrapper` from
+  `unliftio`. Other exceptions are re-thrown unchanged, as before.
+- The publisher loop uses `forever`. The workaround of 0.6.7 was only needed
+  for `LoggingT`.
+
+### Added
+- `AsyncChildException`.
+- Tests for timeouts, for `withSubscription` and for a supervised child that
+  is cancelled directly.
+
+### Removed
+- The dependencies on `unliftio` and `mtl`. The library now depends on `async`
+  directly.
+
+### Migrating
+- Code that already runs in `IO` needs no change to its calls. If it imported
+  `UnliftIO` only to use NQE, it can take `atomically` from
+  `Control.Concurrent.STM`, `threadDelay` from `Control.Concurrent`, `cancel`
+  and `Async` from `Control.Concurrent.Async`, and exceptions from
+  `Control.Exception`.
+- Code in another monad has to lift: `liftIO (send msg mbox)`. For the
+  functions that take an action (`withProcess`, `process`, `withSupervisor`,
+  `withPublisher`, `withSubscription`), run your monad inside the `IO` action.
+  With a `ReaderT env IO` stack, for example:
+
+  ```haskell
+  env <- ask
+  liftIO $ withProcess (\inbox -> runReaderT (server inbox) env) $ \p ->
+    runReaderT (client p) env
+  ```
+
+- In a conduit over another monad, write `transPipe liftIO (conduitMailbox m)`.
+- If you match on `SyncExceptionWrapper` in an exception re-thrown by a
+  supervisor, match on `AsyncChildException` instead.
+- The behaviour with exceptions is otherwise the same as in 0.6.9: supervisors
+  stop their children, and `withSubscription` unsubscribes, with asynchronous
+  exceptions blocked uninterruptibly.
+
 ## 0.6.9
 ### Added
 - More and better documentation than in version 0.6.8.

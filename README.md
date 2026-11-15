@@ -8,10 +8,9 @@ gives you processes that talk to each other through mailboxes, supervisors
 that start and watch over them, and publishers that broadcast messages to
 subscribers.
 
-Everything is built on [STM](https://hackage.haskell.org/package/stm) and
-[unliftio](https://hackage.haskell.org/package/unliftio). It works in `IO` and
-in any monad with a `MonadUnliftIO` instance, such as `ReaderT` stacks or
-`LoggingT`. It has no C dependencies.
+Everything is built on [stm](https://hackage.haskell.org/package/stm) and
+[async](https://hackage.haskell.org/package/async), and runs in plain `IO` and
+`STM`. It has no C dependencies.
 
 - [API documentation](https://hackage.haskell.org/package/nqe)
 - [Changelog](https://github.com/jprupp/nqe/blob/master/CHANGELOG.md)
@@ -77,6 +76,11 @@ you only need to run a few things in parallel and collect their results, plain
 - **Scoped lifetimes.** The `with` functions tie a process, supervisor or
   subscription to a block of code, so it cannot outlive it, even on an
   exception.
+- **Plain `IO`.** Every action is an `IO` or `STM` action from the ordinary
+  `base`, `stm` and `async` libraries. Signatures are short, and exceptions
+  follow the rules of `Control.Exception`, with nothing in between. The cost is
+  that code in a monad transformer stack has to `liftIO` its calls to NQE; see
+  [Things to watch out for](#things-to-watch-out-for).
 - **Not quite Erlang.** No distribution, no registry, no hot code reloading and
   no automatic restarts. Those features add a lot of machinery that most
   Haskell programs never use. Supervisors report deaths; your code decides
@@ -118,7 +122,7 @@ builds with any GHC that current Stackage snapshots support.
    cd nqe-demo
    ```
 
-   In `nqe-demo.cabal`, add `nqe` and `unliftio` to `build-depends` of the
+   In `nqe-demo.cabal`, add `nqe` and `stm` to `build-depends` of the
    executable.
 3. Paste the [quick start](#quick-start) program into `src/Main.hs`.
 4. Build and run it:
@@ -137,7 +141,7 @@ mkdir nqe-demo && cd nqe-demo
 cabal init --non-interactive --exe
 ```
 
-Add `nqe` and `unliftio` to `build-depends` in `nqe-demo.cabal`, put the quick
+Add `nqe` and `stm` to `build-depends` in `nqe-demo.cabal`, put the quick
 start program in `app/Main.hs`, and run it with `cabal run`.
 
 ### Adding NQE to an existing project
@@ -148,7 +152,7 @@ With Cabal, list it in `build-depends`:
 build-depends:
     base
   , nqe
-  , unliftio
+  , stm
 ```
 
 With Stack and hpack, list it in `package.yaml`:
@@ -156,15 +160,18 @@ With Stack and hpack, list it in `package.yaml`:
 ```yaml
 dependencies:
   - nqe
-  - unliftio
+  - stm
 ```
+
+`stm` is there for `atomically`, which you need to run a `Listen` callback.
+
 
 If your Stack resolver does not include NQE, or has an older version, add it
 to `stack.yaml`:
 
 ```yaml
 extra-deps:
-  - nqe-0.6.9
+  - nqe-0.7.0
 ```
 
 ## Quick start
@@ -172,9 +179,9 @@ extra-deps:
 A server that answers `Ping` with `Pong`, and a client that asks it once:
 
 ```haskell
+import Control.Concurrent.STM (atomically)
 import Control.Monad (forever)
 import NQE
-import UnliftIO
 
 data Pong = Pong deriving Show
 
@@ -245,10 +252,10 @@ getCount = query GetCount
 ```haskell
 {-# LANGUAGE LambdaCase #-}
 
+import Control.Concurrent (threadDelay)
+import Control.Concurrent.STM (atomically)
 import Control.Monad (replicateM_)
 import NQE
-import UnliftIO
-import UnliftIO.Concurrent (threadDelay)
 
 main :: IO ()
 main = do
@@ -312,8 +319,8 @@ count <- query GetCount counterProcess
 
 ### Thread linking
 
-`withProcess` and `process` link the new thread to the caller with
-`UnliftIO.link`. An exception in the child is re-thrown in the parent as an
+`withProcess` and `process` link the new thread to the caller with `link` from
+the `async` package. An exception in the child is re-thrown in the parent as an
 `ExceptionInLinkedThread`, so a failing process is never silent.
 
 ## Usage guide
@@ -375,9 +382,16 @@ withSupervisor KillAll $ \sup -> do
     mainLoop
 ```
 
-When the supervisor stops, it cancels all its children. Children run in `IO`;
-use `withRunInIO` or `toIO` to turn an action in your own monad into a
-`ChildAction`.
+When the supervisor stops, it cancels all its children and waits for them. It
+does that with asynchronous exceptions blocked, so cancelling the supervisor
+twice cannot leave children behind.
+
+`KillAll` and `IgnoreGraceful` re-throw the exception that stopped a child. If
+the child died of an asynchronous exception, for example because some other
+thread called `cancel` on it instead of `removeChild`, the supervisor throws it
+wrapped in `AsyncChildException`. That keeps it an error: thrown unwrapped, an
+`AsyncCancelled` would pass for a normal cancellation of the supervisor and
+nobody would be told. `Notify` always gets the original exception.
 
 ### Publishers
 
@@ -400,7 +414,8 @@ it when the function returns. For a bounded or filtered subscription, call
 runConduit $ sourceHandle stdin .| linesUnboundedAsciiC .| conduitMailbox mbox
 ```
 
-With a bounded mailbox, a slow consumer slows down the producer.
+With a bounded mailbox, a slow consumer slows down the producer. The sink runs
+in `IO`; in a pipeline over another monad, use `transPipe liftIO`.
 
 ## Module overview
 
@@ -424,6 +439,13 @@ With a bounded mailbox, a slow consumer slows down the producer.
   unsubscribe leaks the callback and everything it refers to.
 - `withSubscription` uses an unbounded inbox. Read from it, or it grows without
   limit.
+- Everything runs in `IO`. From a `ReaderT` or `LoggingT` stack, call NQE with
+  `liftIO`, and run the stack again inside the `IO` action that you give to
+  `withProcess`, `addChild` and the like. Versions before 0.7.0 did this for
+  you; the [changelog](CHANGELOG.md) says how to migrate.
+- Do not catch `SomeException` around NQE calls without letting asynchronous
+  exceptions through. `cancel` and the linking of threads work by throwing
+  them, and a handler that swallows them leaves threads that cannot be stopped.
 
 ## Development
 
