@@ -17,10 +17,19 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - The publisher loop uses `forever`. The workaround of 0.6.7 was only needed
   for `LoggingT`.
 
+### Fixed
+- A child of a supervisor that never blocks can be stopped. Children ran
+  with asynchronous exceptions masked, because the supervisor forks them
+  inside the mask under which it registers them, and a forked thread
+  inherits the mask. Such a child could be interrupted only where it
+  blocked: one that computed in a loop could not be cancelled, a `timeout`
+  inside it never fired, and `removeChild` and the end of its supervisor
+  waited for it for good. Children now start unmasked.
+
 ### Added
 - `AsyncChildException`.
-- Tests for timeouts, for `withSubscription` and for a supervised child that
-  is cancelled directly.
+- Tests for timeouts, for `withSubscription`, for a supervised child that
+  is cancelled directly, and for children that never block.
 
 ### Removed
 - The dependencies on `unliftio` and `mtl`. The library now depends on `async`

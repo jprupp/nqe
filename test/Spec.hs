@@ -10,10 +10,13 @@ import Control.Concurrent.Async
     ExceptionInLinkedThread (..),
     cancel,
   )
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.STM (atomically, check)
 import Control.Exception
 import Control.Monad
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import NQE
+import System.Timeout (timeout)
 import Test.Hspec
 
 data Pong = Pong deriving (Eq, Show)
@@ -26,6 +29,11 @@ data TestError
   deriving (Show, Eq)
 
 instance Exception TestError
+
+-- | Work that never blocks: it can be interrupted only by a thread that has
+-- asynchronous exceptions unmasked.
+busy :: IORef Int -> IO ()
+busy counter = forever $ atomicModifyIORef' counter (\n -> (n + 1, ()))
 
 testError :: Selector TestError
 testError = const True
@@ -97,6 +105,21 @@ main =
                 cancel child
                 threadDelay $ 500 * 1000
         action `shouldThrow` threadError (asyncChildError cancelled)
+      it "stops a child that never blocks" $ do
+        counter <- newIORef (0 :: Int)
+        done <- timeout (5 * 1000 * 1000) . withSupervisor IgnoreAll $ \sup -> do
+          child <- addChild sup (busy counter)
+          threadDelay $ 100 * 1000
+          removeChild sup child
+        done `shouldBe` Just ()
+        readIORef counter >>= (`shouldSatisfy` (> 0))
+      it "lets a child time out of work that never blocks" $ do
+        counter <- newIORef (0 :: Int)
+        result <- newEmptyMVar
+        got <- withSupervisor IgnoreAll $ \sup -> do
+          _ <- addChild sup (timeout (100 * 1000) (busy counter) >>= putMVar result)
+          timeout (5 * 1000 * 1000) (takeMVar result)
+        got `shouldBe` Just Nothing
       it "monitors processes" $ do
         let rcv i = receive i :: IO (Maybe SomeException)
         (inbox, mailbox) <- newMailbox

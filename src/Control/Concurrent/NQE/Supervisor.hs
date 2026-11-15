@@ -47,6 +47,15 @@
 --   still stopping. The price is that a child that refuses to die holds up
 --   its supervisor.
 --
+-- * __A child can always be stopped.__ A child starts with asynchronous
+--   exceptions unmasked, whatever the state of the thread that added it and
+--   of the supervisor that forks it. Before 0.7.0 a child inherited the
+--   mask under which the supervisor registers it, and could be interrupted
+--   only where it blocked: one that computed in a loop without blocking
+--   could not be cancelled, nor leave its own 'System.Timeout.timeout', and
+--   held up 'removeChild' and its supervisor for good. A child that needs to
+--   be masked for a while says so itself, with 'Control.Exception.mask'.
+--
 -- * __A dead child is an error, however it died.__ 'KillAll' and
 --   'IgnoreGraceful' re-throw the exception that stopped a child. An
 --   asynchronous one, such as the t'AsyncCancelled' of a child that somebody
@@ -282,9 +291,15 @@ throwChild e =
     Nothing -> throwIO e
 
 -- | Internal function to start a child process.
+--
+-- The fork and the registration are masked together, so that no exception
+-- can leave a child running that the supervisor does not know about. A
+-- forked thread inherits the mask of the thread that forks it, so the child
+-- is given back its exceptions explicitly: left masked, it could only be
+-- cancelled, or timed out, at a point where it blocks.
 startChild :: TVar [Child] -> ChildAction -> IO Child
 startChild state ch = mask_ $ do
-  a <- async ch
+  a <- asyncWithUnmask $ \unmask -> unmask ch
   atomically $ modifyTVar' state (a :)
   return a
 
